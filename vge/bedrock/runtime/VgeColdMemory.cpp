@@ -25,16 +25,12 @@ constexpr uint32_t kTickMs = 50;
 constexpr uint32_t kPassPauseMs = 1000;
 constexpr uint32_t kGraceMs = 5000;
 constexpr uint32_t kBaseIntervalMs = 4000;
-constexpr uint8_t kMaxLevel = 6;
 
-// A block is at most 16 pages of one committed private region. A page that
-// comes back into the working set after an eviction is hot, so its block is
-// probed again only after an interval that doubles on every return.
 struct Block {
   uint32_t nextProbe = 0;
   uint32_t pass = 0;
   uint16_t evicted = 0;
-  uint8_t level = 0;
+  bool hot = false;
 };
 
 class ColdMemoryManager {
@@ -43,6 +39,7 @@ class ColdMemoryManager {
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
     SetThreadDescription(GetCurrentThread(), L"VgeColdMemory");
     mLog = !!PR_GetEnv("VGE_MEMORY_TRIM_LOG");
+    mLowMemory = CreateMemoryResourceNotification(LowMemoryResourceNotification);
     for (;;) {
       Pass();
       Sleep(kPassPauseMs);
@@ -54,6 +51,9 @@ class ColdMemoryManager {
     mPass++;
     mEvictedInPass = 0;
     mReturnedInPass = 0;
+    BOOL low = FALSE;
+    mUnderPressure = mLowMemory &&
+                     QueryMemoryResourceNotification(mLowMemory, &low) && low;
     uintptr_t cursor = 0;
     MEMORY_BASIC_INFORMATION info;
     while (VirtualQuery(reinterpret_cast<void*>(cursor), &info, sizeof(info))) {
@@ -96,24 +96,27 @@ class ColdMemoryManager {
       state.nextProbe = now + kGraceMs;
       return;
     }
+    if (state.hot && !mUnderPressure) {
+      return;
+    }
     if (int32_t(now - state.nextProbe) < 0) {
       return;
     }
     size_t resident = CountResident(aFrom, aPages);
     Pace(mProbes, 1, kTickProbes);
+    state.nextProbe = now + kBaseIntervalMs;
     if (!resident) {
       state.evicted = 0;
-      state.level = 0;
-      state.nextProbe = now + kBaseIntervalMs;
       return;
     }
-    if (state.evicted) {
-      state.level = std::min<uint8_t>(state.level + 1, kMaxLevel);
+    if (state.evicted && !mUnderPressure) {
+      state.hot = true;
+      state.evicted = 0;
       mReturnedInPass += resident;
+      return;
     }
     VirtualUnlock(reinterpret_cast<void*>(aFrom), aPages * kPageSize);
     state.evicted = uint16_t(resident);
-    state.nextProbe = now + (kBaseIntervalMs << state.level);
     mEvictedInPass += resident;
     Pace(mEvicted, resident, kTickPages);
   }
@@ -151,6 +154,8 @@ class ColdMemoryManager {
   size_t mEvictedInPass = 0;
   size_t mReturnedInPass = 0;
   bool mLog = false;
+  bool mUnderPressure = false;
+  HANDLE mLowMemory = nullptr;
 };
 
 }  // namespace
