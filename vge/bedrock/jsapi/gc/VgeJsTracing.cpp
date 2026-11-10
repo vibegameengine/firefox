@@ -232,7 +232,7 @@ JS::GCCellPtr CellForV8Value(JSContext* aCx, v8::Local<v8::Value> aValue) {
     return JS::GCCellPtr();
   }
   auto* cell =
-      static_cast<ObjectCell*>(existing.As<v8::External>()->Value());
+      static_cast<ObjectCell*>(existing.As<v8::External>()->Value(v8::kExternalPointerTypeTagDefault));
   return JS::GCCellPtr(cell->asObject());
 }
 

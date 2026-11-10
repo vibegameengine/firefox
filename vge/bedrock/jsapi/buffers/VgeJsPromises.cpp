@@ -118,15 +118,15 @@ JSObject* GlobalForJob(JSContext* aCx, v8::Local<v8::Context> aJobContext) {
 bool AlreadyResolved(v8::Local<v8::Context> aCtx,
                      v8::Local<v8::Object> aState) {
   v8::Local<v8::Value> flag;
-  return aState->GetPrivate(aCtx, PrivateKey(aCtx->GetIsolate(), kResolvedKey))
+  return aState->GetPrivate(aCtx, PrivateKey(v8::Isolate::GetCurrent(), kResolvedKey))
              .ToLocal(&flag) &&
          flag->IsTrue();
 }
 
 void MarkResolved(v8::Local<v8::Context> aCtx, v8::Local<v8::Object> aState) {
   aState
-      ->SetPrivate(aCtx, PrivateKey(aCtx->GetIsolate(), kResolvedKey),
-                   v8::True(aCtx->GetIsolate()))
+      ->SetPrivate(aCtx, PrivateKey(v8::Isolate::GetCurrent(), kResolvedKey),
+                   v8::True(v8::Isolate::GetCurrent()))
       .Check();
 }
 
@@ -169,7 +169,7 @@ bool MakeResolvingFunctions(v8::Local<v8::Context> aCtx,
                             v8::Local<v8::Object> aState,
                             v8::Local<v8::Function>* aResolve,
                             v8::Local<v8::Function>* aReject) {
-  v8::Isolate* isolate = aCtx->GetIsolate();
+  v8::Isolate* isolate = v8::Isolate::GetCurrent();
   v8::Local<v8::Value> elements[] = {aPromise, aState};
   v8::Local<v8::Array> data = v8::Array::New(isolate, elements, 2);
   return v8::Function::New(aCtx, ResolveCallback, data, 1).ToLocal(aResolve) &&
@@ -189,7 +189,7 @@ bool RequiresDeferral(v8::Local<v8::Context> aCtx,
   if (!aValue->IsObject()) {
     return false;
   }
-  v8::Isolate* isolate = aCtx->GetIsolate();
+  v8::Isolate* isolate = v8::Isolate::GetCurrent();
   v8::Local<v8::String> then = v8::String::NewFromUtf8Literal(isolate, "then");
   v8::Local<v8::Value> current = aValue;
   while (current->IsObject()) {
@@ -287,7 +287,7 @@ void PropagateUserInput(v8::Local<v8::Context> aCtx,
   if (aParent.IsEmpty() || !aParent->IsPromise()) {
     return;
   }
-  v8::Local<v8::Private> key = PrivateKey(aCtx->GetIsolate(), kUserInputKey);
+  v8::Local<v8::Private> key = PrivateKey(v8::Isolate::GetCurrent(), kUserInputKey);
   v8::Local<v8::Value> state;
   if (aParent.As<v8::Object>()->GetPrivate(aCtx, key).ToLocal(&state) &&
       state->IsInt32() && state.As<v8::Int32>()->Value() != 0) {

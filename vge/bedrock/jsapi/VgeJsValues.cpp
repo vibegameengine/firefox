@@ -70,15 +70,13 @@ StringCell* FillString(JSContext* aCx, v8::Local<v8::String> aString,
   uintptr_t flags = JS::shadow::String::LINEAR_BIT;
   if (aString->IsOneByte()) {
     auto* chars = static_cast<uint8_t*>(malloc(length + 1));
-    aString->WriteOneByte(aCx->isolate, chars, 0, length,
-                          v8::String::NO_NULL_TERMINATION);
+    aString->WriteOneByteV2(aCx->isolate, 0, uint32_t(length), chars);
     chars[length] = 0;
     cell->chars = chars;
     flags |= JS::shadow::String::LATIN1_CHARS_BIT;
   } else {
     auto* chars = static_cast<uint16_t*>(malloc((length + 1) * 2));
-    aString->Write(aCx->isolate, chars, 0, length,
-                   v8::String::NO_NULL_TERMINATION);
+    aString->WriteV2(aCx->isolate, 0, uint32_t(length), chars);
     chars[length] = 0;
     cell->chars = chars;
   }
@@ -136,15 +134,16 @@ ObjectCell* NewObjectCell(JSContext* aCx, Shape* aShape,
     }
   }
   v8::Local<v8::Context> ctx = aCx->v8Context();
-  aObject->SetPrivate(ctx, CellKey(aCx), v8::External::New(aCx->isolate, cell))
+  aObject->SetPrivate(ctx, CellKey(aCx), v8::External::New(aCx->isolate, cell, v8::kExternalPointerTypeTagDefault))
       .Check();
   if (aAnchored) {
     Anchor* anchor = cppgc::MakeGarbageCollected<Anchor>(
         aCx->isolate->GetCppHeap()->GetAllocationHandle(), cell);
     cell->tail.anchor = anchor;
     aObject->SetAlignedPointerInInternalField(
-        0, const_cast<uint16_t*>(&kWrapperEmbedderId));
-    aObject->SetAlignedPointerInInternalField(1, anchor);
+        0, const_cast<uint16_t*>(&kWrapperEmbedderId), v8::kEmbedderDataTypeTagDefault);
+    aObject->SetAlignedPointerInInternalField(1, anchor, v8::kEmbedderDataTypeTagDefault);
+    v8::Object::Wrap(aCx->isolate, aObject, anchor, kAnchorTag);
     anchor->SetWrapper(aCx->isolate, aObject);
   }
   BindCellHandle(aCx, &cell->tail, aObject, false);
@@ -159,7 +158,7 @@ JSObject* ObjectFromV8(JSContext* aCx, v8::Local<v8::Object> aObject) {
   v8::Local<v8::Value> existing;
   if (aObject->GetPrivate(ctx, CellKey(aCx)).ToLocal(&existing) &&
       existing->IsExternal()) {
-    return static_cast<ObjectCell*>(existing.As<v8::External>()->Value())
+    return static_cast<ObjectCell*>(existing.As<v8::External>()->Value(v8::kExternalPointerTypeTagDefault))
         ->asObject();
   }
   JS::Realm* realm = aCx->realm();
@@ -193,8 +192,7 @@ JSString* StringFromV8(JSContext* aCx, v8::Local<v8::String> aString) {
 JSString* AtomFromV8(JSContext* aCx, v8::Local<v8::String> aString) {
   std::u16string content;
   content.resize(aString->Length());
-  aString->Write(aCx->isolate, reinterpret_cast<uint16_t*>(content.data()), 0,
-                 int(content.size()), v8::String::NO_NULL_TERMINATION);
+  aString->WriteV2(aCx->isolate, 0, uint32_t(int(content.size())), reinterpret_cast<uint16_t*>(content.data()));
   auto it = aCx->runtime->atoms.find(content);
   if (it != aCx->runtime->atoms.end()) {
     return it->second->asString();

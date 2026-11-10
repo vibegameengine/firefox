@@ -44,7 +44,7 @@ v8::Local<v8::Value> GetNamed(v8::Local<v8::Context> aCtx,
   if (aBase.IsEmpty() || !aBase->IsObject()) {
     return v8::Local<v8::Value>();
   }
-  v8::Isolate* isolate = aCtx->GetIsolate();
+  v8::Isolate* isolate = v8::Isolate::GetCurrent();
   v8::Local<v8::String> key =
       v8::String::NewFromUtf8(isolate, aName).ToLocalChecked();
   v8::Local<v8::Value> out;
@@ -55,7 +55,7 @@ v8::Local<v8::Value> GetNamed(v8::Local<v8::Context> aCtx,
 }
 
 v8::Local<v8::Array> CaptureIntrinsics(v8::Local<v8::Context> aCtx) {
-  v8::Isolate* isolate = aCtx->GetIsolate();
+  v8::Isolate* isolate = v8::Isolate::GetCurrent();
   v8::TryCatch tc(isolate);
   v8::Local<v8::Array> store = v8::Array::New(isolate, int(IntrinsicId::Limit));
   auto put = [&](IntrinsicId aId, v8::Local<v8::Value> aValue) {

@@ -5,6 +5,7 @@ EXPORTS.vge.bedrock += [
 SOURCES += [
     "VgeAllocTrace.cpp",
     "VgeBedrockRuntime.cpp",
+    "VgeColdMemory.cpp",
 ]
 
 include("/ipc/chromium/chromium-config.mozbuild")

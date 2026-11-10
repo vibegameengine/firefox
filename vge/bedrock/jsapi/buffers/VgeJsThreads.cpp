@@ -1,4 +1,5 @@
 #include "VgeJsBuffers.h"
+#include "v8-blocking-wait.h"
 
 #include "mozilla/Assertions.h"
 
@@ -25,17 +26,12 @@ struct WaitScratch {
 
 thread_local WaitScratch tWaitScratch;
 
-void AtomicsWaitCallback(v8::Isolate::AtomicsWaitEvent aEvent,
-                         v8::Local<v8::SharedArrayBuffer> aArrayBuffer,
-                         size_t aOffsetInBytes, int64_t aValue,
-                         double aTimeoutInMs,
-                         v8::Isolate::AtomicsWaitWakeHandle* aStopHandle,
-                         void* aData) {
+void BlockingWaitCallback(void* aData, bool aStarting) {
   ContextState* state = static_cast<ContextState*>(aData);
   if (!state->beforeWait || !state->afterWait) {
     return;
   }
-  if (aEvent == v8::Isolate::AtomicsWaitEvent::kStartWait) {
+  if (aStarting) {
     tWaitScratch.cookie = state->beforeWait(tWaitScratch.memory);
     return;
   }
@@ -91,6 +87,6 @@ void JS::SetWaitCallback(JSRuntime* aRuntime, JS::BeforeWaitCallback aBefore,
   ContextState* state = StateForRuntime(aRuntime);
   state->beforeWait = aBefore;
   state->afterWait = aAfter;
-  aRuntime->isolate->SetAtomicsWaitCallback(
-      aBefore ? AtomicsWaitCallback : nullptr, state);
+  v8::SetBlockingWaitCallback(aRuntime->isolate,
+                              aBefore ? BlockingWaitCallback : nullptr, state);
 }

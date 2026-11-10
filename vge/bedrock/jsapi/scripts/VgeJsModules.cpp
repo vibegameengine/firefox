@@ -147,9 +147,9 @@ JS::ModuleType TypeFromAttributes(JSContext* aCx,
   }
   v8::Local<v8::Context> context = aCx->v8Context();
   for (int i = 0; i + 1 < aAttributes->Length(); i += aStride) {
-    v8::Local<v8::Value> key = aAttributes->Get(context, i).As<v8::Value>();
+    v8::Local<v8::Value> key = aAttributes->Get(i).As<v8::Value>();
     v8::Local<v8::Value> value =
-        aAttributes->Get(context, i + 1).As<v8::Value>();
+        aAttributes->Get(i + 1).As<v8::Value>();
     if (Utf8Of(aCx->isolate, key) != "type") {
       return JS::ModuleType::Unknown;
     }
@@ -734,7 +734,7 @@ JSObject* NewModuleObjectFor(JSContext* aCx, v8::Local<v8::Module> aModule,
   }
   for (int i = 0; i < requests->Length(); i++) {
     v8::Local<v8::ModuleRequest> request =
-        requests->Get(context, i).As<v8::ModuleRequest>();
+        requests->Get(i).As<v8::ModuleRequest>();
     RequestEntry entry;
     entry.specifier = Utf16Of(aCx->isolate, request->GetSpecifier());
     entry.type = TypeFromAttributes(aCx, request->GetImportAssertions(), 3);

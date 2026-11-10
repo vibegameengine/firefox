@@ -254,35 +254,41 @@ class EventLoopTaskRunner final : public v8::TaskRunner {
   EventLoopTaskRunner(IsolateTasks* aTasks, uint32_t aPriority)
       : mTasks(aTasks), mPriority(aPriority) {}
 
-  void PostTask(std::unique_ptr<v8::Task> aTask) override {
+  bool IdleTasksEnabled() override { return true; }
+  bool NonNestableTasksEnabled() const override { return true; }
+  bool NonNestableDelayedTasksEnabled() const override { return true; }
+
+ protected:
+  void PostTaskImpl(std::unique_ptr<v8::Task> aTask,
+                    const v8::SourceLocation&) override {
     Post(std::move(aTask), false, 0);
   }
 
-  void PostNonNestableTask(std::unique_ptr<v8::Task> aTask) override {
+  void PostNonNestableTaskImpl(std::unique_ptr<v8::Task> aTask,
+                               const v8::SourceLocation&) override {
     Post(std::move(aTask), true, 0);
   }
 
-  void PostDelayedTask(std::unique_ptr<v8::Task> aTask,
-                       double aDelaySeconds) override {
+  void PostDelayedTaskImpl(std::unique_ptr<v8::Task> aTask,
+                           double aDelaySeconds,
+                           const v8::SourceLocation&) override {
     Post(std::move(aTask), false, aDelaySeconds);
   }
 
-  void PostNonNestableDelayedTask(std::unique_ptr<v8::Task> aTask,
-                                  double aDelaySeconds) override {
+  void PostNonNestableDelayedTaskImpl(std::unique_ptr<v8::Task> aTask,
+                                      double aDelaySeconds,
+                                      const v8::SourceLocation&) override {
     Post(std::move(aTask), true, aDelaySeconds);
   }
 
-  void PostIdleTask(std::unique_ptr<v8::IdleTask> aTask) override {
+  void PostIdleTaskImpl(std::unique_ptr<v8::IdleTask> aTask,
+                        const v8::SourceLocation&) override {
     PendingTask pending;
     pending.idleTask = std::move(aTask);
     pending.priority = nsIRunnablePriority::PRIORITY_IDLE;
     pending.nonNestable = true;
     mTasks->Post(std::move(pending), 0);
   }
-
-  bool IdleTasksEnabled() override { return true; }
-  bool NonNestableTasksEnabled() const override { return true; }
-  bool NonNestableDelayedTasksEnabled() const override { return true; }
 
  private:
   void Post(std::unique_ptr<v8::Task> aTask, bool aNonNestable,
@@ -364,47 +370,12 @@ class EventLoopPlatform final : public v8::Platform {
     return mInner->GetThreadIsolatedAllocator();
   }
 
-  v8::ZoneBackingAllocator* GetZoneBackingAllocator() override {
-    return mInner->GetZoneBackingAllocator();
-  }
-
   void OnCriticalMemoryPressure() override {
     mInner->OnCriticalMemoryPressure();
   }
 
   int NumberOfWorkerThreads() override {
     return mInner->NumberOfWorkerThreads();
-  }
-
-  void CallOnWorkerThread(std::unique_ptr<v8::Task> aTask) override {
-    mInner->CallOnWorkerThread(std::move(aTask));
-  }
-
-  void CallBlockingTaskOnWorkerThread(
-      std::unique_ptr<v8::Task> aTask) override {
-    mInner->CallBlockingTaskOnWorkerThread(std::move(aTask));
-  }
-
-  void CallLowPriorityTaskOnWorkerThread(
-      std::unique_ptr<v8::Task> aTask) override {
-    mInner->CallLowPriorityTaskOnWorkerThread(std::move(aTask));
-  }
-
-  void CallDelayedOnWorkerThread(std::unique_ptr<v8::Task> aTask,
-                                 double aDelaySeconds) override {
-    mInner->CallDelayedOnWorkerThread(std::move(aTask), aDelaySeconds);
-  }
-
-  std::unique_ptr<v8::JobHandle> PostJob(
-      v8::TaskPriority aPriority,
-      std::unique_ptr<v8::JobTask> aJobTask) override {
-    return mInner->PostJob(aPriority, std::move(aJobTask));
-  }
-
-  std::unique_ptr<v8::JobHandle> CreateJob(
-      v8::TaskPriority aPriority,
-      std::unique_ptr<v8::JobTask> aJobTask) override {
-    return mInner->CreateJob(aPriority, std::move(aJobTask));
   }
 
   std::unique_ptr<v8::ScopedBlockingCall> CreateBlockingScope(
@@ -447,29 +418,20 @@ class EventLoopPlatform final : public v8::Platform {
   std::unique_ptr<v8::JobHandle> CreateJobImpl(
       v8::TaskPriority aPriority, std::unique_ptr<v8::JobTask> aJobTask,
       const v8::SourceLocation& aLocation) override {
-    return mInner->CreateJob(aPriority, std::move(aJobTask));
+    return mInner->CreateJob(aPriority, std::move(aJobTask), aLocation);
   }
 
   void PostTaskOnWorkerThreadImpl(
       v8::TaskPriority aPriority, std::unique_ptr<v8::Task> aTask,
       const v8::SourceLocation& aLocation) override {
-    switch (aPriority) {
-      case v8::TaskPriority::kBestEffort:
-        mInner->CallLowPriorityTaskOnWorkerThread(std::move(aTask));
-        break;
-      case v8::TaskPriority::kUserVisible:
-        mInner->CallOnWorkerThread(std::move(aTask));
-        break;
-      case v8::TaskPriority::kUserBlocking:
-        mInner->CallBlockingTaskOnWorkerThread(std::move(aTask));
-        break;
-    }
+    mInner->PostTaskOnWorkerThread(aPriority, std::move(aTask), aLocation);
   }
 
   void PostDelayedTaskOnWorkerThreadImpl(
       v8::TaskPriority aPriority, std::unique_ptr<v8::Task> aTask,
       double aDelaySeconds, const v8::SourceLocation& aLocation) override {
-    mInner->CallDelayedOnWorkerThread(std::move(aTask), aDelaySeconds);
+    mInner->PostDelayedTaskOnWorkerThread(aPriority, std::move(aTask),
+                                          aDelaySeconds, aLocation);
   }
 
  private:

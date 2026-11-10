@@ -64,8 +64,10 @@ class HeapGraph {
       }
       const JSClass* clasp = cell->shape ? cell->shape->base.clasp : nullptr;
       if (clasp && (clasp->flags & JSCLASS_IS_GLOBAL) && value->IsObject()) {
-        v8::Local<v8::Value> inner = value.As<v8::Object>()->GetPrototype();
-        v8::SnapshotObjectId innerId = mProfiler->GetObjectId(inner);
+        v8::Local<v8::Value> inner = v8::InnerGlobalOfProxy(isolate, value);
+        v8::SnapshotObjectId innerId = inner.IsEmpty()
+                                           ? v8::HeapProfiler::kUnknownObjectId
+                                           : mProfiler->GetObjectId(inner);
         if (innerId != v8::HeapProfiler::kUnknownObjectId) {
           mCellById.emplace(innerId, thing);
         }

@@ -53,7 +53,7 @@ ErrorInfo* FindErrorInfo(JSContext* aCx, v8::Local<v8::Object> aError) {
       !stored->IsExternal()) {
     return nullptr;
   }
-  return static_cast<ErrorInfo*>(stored.As<v8::External>()->Value());
+  return static_cast<ErrorInfo*>(stored.As<v8::External>()->Value(v8::kExternalPointerTypeTagDefault));
 }
 
 void SetReportStrings(ErrorInfo* aInfo) {
@@ -74,7 +74,7 @@ ErrorInfo* AttachErrorInfo(JSContext* aCx, v8::Local<v8::Object> aError,
   aInfo->weak.SetWeak(aInfo, ErrorInfoDied, v8::WeakCallbackType::kParameter);
   aError
       ->SetPrivate(aCx->v8Context(), ErrorInfoKey(aCx->isolate),
-                   v8::External::New(aCx->isolate, aInfo))
+                   v8::External::New(aCx->isolate, aInfo, v8::kExternalPointerTypeTagDefault))
       .Check();
   return aInfo;
 }

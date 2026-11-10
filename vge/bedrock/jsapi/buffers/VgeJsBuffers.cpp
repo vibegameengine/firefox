@@ -205,7 +205,7 @@ JSObject* NewTypedArray(JSContext* aCx, JS::Scalar::Type aType,
                         size_t aNelements) {
   mozilla::CheckedInt<size_t> bytes =
       mozilla::CheckedInt<size_t>(aNelements) * ElementSize(aType);
-  if (!bytes.isValid() || aNelements > v8::TypedArray::kMaxLength) {
+  if (!bytes.isValid() || aNelements > v8::Uint8Array::kMaxLength) {
     ReportTooLarge(aCx, aType);
     return nullptr;
   }
@@ -238,7 +238,7 @@ JSObject* NewTypedArrayFromArray(JSContext* aCx, JS::Scalar::Type aType,
     int64_t raw = lengthInt->Value();
     length = raw < 0 ? 0 : uint64_t(raw);
   }
-  if (length > v8::TypedArray::kMaxLength) {
+  if (length > v8::Uint8Array::kMaxLength) {
     ReportTooLarge(aCx, aType);
     return nullptr;
   }
@@ -327,7 +327,7 @@ void FreeExternalContents(void* aData, size_t aLength, void* aDeleterData) {
 JSObject* NewBufferForContents(JSContext* aCx, size_t aNbytes, void* aData,
                                v8::BackingStore::DeleterCallback aDeleter,
                                void* aDeleterData) {
-  if (aNbytes > v8::TypedArray::kMaxLength) {
+  if (aNbytes > v8::Uint8Array::kMaxLength) {
     ReportError(aCx, JSMSG_BAD_ARRAY_LENGTH);
     return nullptr;
   }
@@ -485,7 +485,7 @@ JSObject* BufferObjectFromV8(JSContext* aCx, v8::Local<v8::Object> aObject) {
           .ToLocal(&existing) &&
       existing->IsExternal()) {
     ObjectCell* cell =
-        static_cast<ObjectCell*>(existing.As<v8::External>()->Value());
+        static_cast<ObjectCell*>(existing.As<v8::External>()->Value(v8::kExternalPointerTypeTagDefault));
     if (clasp && !cell->shape->isProxy &&
         cell->shape->base.clasp == js::ObjectClassPtr) {
       cell->shape = ShapeFor(clasp, cell->shape->base.realm);
@@ -594,7 +594,7 @@ JSObject* NewTypedArrayWithBuffer(JSContext* aCx, JS::Scalar::Type aType,
     }
     length = size_t(aLength);
   }
-  if (length > v8::TypedArray::kMaxLength) {
+  if (length > v8::Uint8Array::kMaxLength) {
     ReportTooLarge(aCx, aType);
     return nullptr;
   }
@@ -1176,7 +1176,7 @@ bool JS::HasDefinedArrayBufferDetachKey(JSContext* aCx, JS::HandleObject aObj,
 }
 
 JSObject* JS::NewArrayBuffer(JSContext* aCx, size_t aNbytes) {
-  if (aNbytes > v8::TypedArray::kMaxLength) {
+  if (aNbytes > v8::Uint8Array::kMaxLength) {
     ReportError(aCx, JSMSG_BAD_ARRAY_LENGTH);
     return nullptr;
   }

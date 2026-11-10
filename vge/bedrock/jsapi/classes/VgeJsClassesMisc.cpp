@@ -103,8 +103,7 @@ void AppendV8String(v8::Isolate* aIsolate, std::u16string& aOut,
                     v8::Local<v8::String> aString) {
   size_t start = aOut.size();
   aOut.resize(start + aString->Length());
-  aString->Write(aIsolate, reinterpret_cast<uint16_t*>(&aOut[start]), 0,
-                 aString->Length(), v8::String::NO_NULL_TERMINATION);
+  aString->WriteV2(aIsolate, 0, uint32_t(aString->Length()), reinterpret_cast<uint16_t*>(&aOut[start]));
 }
 
 void AppendQuoted(v8::Isolate* aIsolate, std::u16string& aOut,
@@ -1007,7 +1006,7 @@ bool JS_SetPrototype(JSContext* aCx, JS::HandleObject aObj,
     return result.checkStrict(aCx, aObj);
   }
   v8::TryCatch tryCatch(isolate);
-  if (target->SetPrototype(ctx, proto).IsNothing()) {
+  if (ToV8(aCx, aObj)->SetPrototype(ctx, proto).IsNothing()) {
     return v8.Check(tryCatch);
   }
   return true;

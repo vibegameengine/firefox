@@ -77,7 +77,15 @@ class VgeStreamConsumer final : public JS::StreamConsumer {
               }
             });
       }
-      mStreaming->Finish(!mCompiledBytes.empty());
+      auto cached = std::make_shared<std::vector<uint8_t>>(
+          std::move(mCompiledBytes));
+      mStreaming->Finish(
+          [cached](v8::WasmStreaming::ModuleCachingInterface& aCaching) {
+            if (!cached->empty()) {
+              aCaching.SetCachedCompiledModuleBytes(
+                  std::span<const uint8_t>(cached->data(), cached->size()));
+            }
+          });
     }
     Bury([this] { delete this; });
   }
@@ -121,10 +129,7 @@ class VgeStreamConsumer final : public JS::StreamConsumer {
       return;
     }
     mCompiledBytes.assign(aBegin, aBegin + aLength);
-    if (!mStreaming->SetCompiledModuleBytes(mCompiledBytes.data(),
-                                            mCompiledBytes.size())) {
-      mCompiledBytes.clear();
-    }
+    mStreaming->SetHasCompiledModuleBytes();
   }
 
   void noteResponseURLs(const char* aMaybeUrl,

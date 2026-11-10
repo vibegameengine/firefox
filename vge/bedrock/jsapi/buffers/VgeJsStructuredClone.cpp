@@ -87,7 +87,7 @@ enum TransferableMapHeader {
 
 static_assert(SCTAG_END_OF_BUILTIN_TYPES <= JS_SCTAG_USER_MIN);
 
-constexpr uint64_t kByteLengthLimit = v8::TypedArray::kMaxLength;
+constexpr uint64_t kByteLengthLimit = v8::Uint8Array::kMaxLength;
 constexpr uint32_t kMaxRefCount = 0x7FFFFFFF;
 
 inline uint64_t PairToUInt64(uint32_t aTag, uint32_t aData) {
@@ -708,13 +708,11 @@ bool JSStructuredCloneWriter::writeString(uint32_t aTag,
   uint32_t length = uint32_t(aString->Length());
   if (aString->ContainsOnlyOneByte()) {
     std::vector<uint8_t> chars(length);
-    aString->WriteOneByte(isolate(), chars.data(), 0, int(length),
-                          v8::String::NO_NULL_TERMINATION);
+    aString->WriteOneByteV2(isolate(), 0, uint32_t(int(length)), chars.data());
     return writeStringChars(aTag, chars.data(), length, true);
   }
   std::vector<uint16_t> chars(length);
-  aString->Write(isolate(), chars.data(), 0, int(length),
-                 v8::String::NO_NULL_TERMINATION);
+  aString->WriteV2(isolate(), 0, uint32_t(int(length)), chars.data());
   return writeStringChars(aTag, chars.data(), length, false);
 }
 

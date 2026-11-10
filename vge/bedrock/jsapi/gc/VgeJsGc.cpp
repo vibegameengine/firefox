@@ -756,7 +756,7 @@ JS_PUBLIC_API void JS::RunNurseryCollection(
     return;
   }
   if (reason == JS::GCReason::PREPARE_FOR_PAGELOAD) {
-    rt->isolate->SetRAILMode(v8::PERFORMANCE_LOAD);
+    rt->isolate->SetIsLoading(true);
   }
 }
 
@@ -957,9 +957,7 @@ JS_PUBLIC_API js::gc::ProfilerMemoryCounts js::gc::GetProfilerMemoryCounts() {
 
 JS_PUBLIC_API void js::gc::SetPerformanceHint(JSContext* cx,
                                               js::gc::PerformanceHint hint) {
-  cx->isolate->SetRAILMode(hint == js::gc::PerformanceHint::InPageLoad
-                               ? v8::PERFORMANCE_LOAD
-                               : v8::PERFORMANCE_ANIMATION);
+  cx->isolate->SetIsLoading(hint == js::gc::PerformanceHint::InPageLoad);
 }
 
 JS_PUBLIC_API void js::SetRealmIsDyingHint(JSObject* global) {

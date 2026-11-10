@@ -113,54 +113,58 @@ class InterceptorScope {
   AutoEnterRealmOf mRealm;
 };
 
-void GetCommon(JSContext* aCx, JS::HandleObject aProxy, JS::HandleId aId,
+v8::Intercepted GetCommon(JSContext* aCx, JS::HandleObject aProxy, JS::HandleId aId,
                const v8::PropertyCallbackInfo<v8::Value>& aInfo) {
-  JS::RootedValue receiver(aCx, ValueFromV8(aCx, aInfo.This()));
+  JS::RootedValue receiver(aCx, ValueFromV8(aCx, aInfo.Holder()));
   JS::RootedValue vp(aCx);
   if (!ProxyGet(aCx, aProxy, receiver, aId, &vp)) {
     ThrowPendingToV8(aCx);
-    return;
+    return v8::Intercepted::kYes;
   }
   if (vp.isUndefined()) {
     bool found = false;
     if (!ProxyHas(aCx, aProxy, aId, &found)) {
       ThrowPendingToV8(aCx);
-      return;
+      return v8::Intercepted::kYes;
     }
     if (!found) {
-      return;
+      return v8::Intercepted::kNo;
     }
   }
   aInfo.GetReturnValue().Set(ToV8(aCx, vp.get()));
+  return v8::Intercepted::kYes;
 }
 
-void SetCommon(JSContext* aCx, JS::HandleObject aProxy, JS::HandleId aId,
+v8::Intercepted SetCommon(JSContext* aCx, JS::HandleObject aProxy, JS::HandleId aId,
                v8::Local<v8::Value> aValue,
-               const v8::PropertyCallbackInfo<v8::Value>& aInfo) {
+               const v8::PropertyCallbackInfo<v8::Boolean>& aInfo) {
   JS::RootedValue value(aCx, ValueFromV8(aCx, aValue));
-  JS::RootedValue receiver(aCx, ValueFromV8(aCx, aInfo.This()));
+  JS::RootedValue receiver(aCx, ValueFromV8(aCx, aInfo.Holder()));
   JS::ObjectOpResult result;
   if (!ProxySet(aCx, aProxy, aId, value, receiver, result)) {
     ThrowPendingToV8(aCx);
-    return;
+    return v8::Intercepted::kYes;
   }
   if (!result.ok() && aInfo.ShouldThrowOnError()) {
     ReportOpFailure(aCx, aProxy, aId, result);
     ThrowPendingToV8(aCx);
-    return;
+    return v8::Intercepted::kYes;
   }
-  aInfo.GetReturnValue().Set(aValue);
+  if (!result.ok()) {
+    aInfo.GetReturnValue().Set(false);
+  }
+  return v8::Intercepted::kYes;
 }
 
-void QueryCommon(JSContext* aCx, JS::HandleObject aProxy, JS::HandleId aId,
+v8::Intercepted QueryCommon(JSContext* aCx, JS::HandleObject aProxy, JS::HandleId aId,
                  const v8::PropertyCallbackInfo<v8::Integer>& aInfo) {
   JS::Rooted<mozilla::Maybe<JS::PropertyDescriptor>> desc(aCx);
   if (!ProxyGetOwnPropertyDescriptor(aCx, aProxy, aId, &desc)) {
     ThrowPendingToV8(aCx);
-    return;
+    return v8::Intercepted::kYes;
   }
   if (desc.isNothing()) {
-    return;
+    return v8::Intercepted::kNo;
   }
   int attributes = v8::None;
   if (desc->hasEnumerable() && !desc->enumerable()) {
@@ -173,21 +177,23 @@ void QueryCommon(JSContext* aCx, JS::HandleObject aProxy, JS::HandleId aId,
     attributes |= v8::ReadOnly;
   }
   aInfo.GetReturnValue().Set(int32_t(attributes));
+  return v8::Intercepted::kYes;
 }
 
-void DeleteCommon(JSContext* aCx, JS::HandleObject aProxy, JS::HandleId aId,
+v8::Intercepted DeleteCommon(JSContext* aCx, JS::HandleObject aProxy, JS::HandleId aId,
                   const v8::PropertyCallbackInfo<v8::Boolean>& aInfo) {
   JS::ObjectOpResult result;
   if (!ProxyDelete(aCx, aProxy, aId, result)) {
     ThrowPendingToV8(aCx);
-    return;
+    return v8::Intercepted::kYes;
   }
   if (!result.ok() && aInfo.ShouldThrowOnError()) {
     ReportOpFailure(aCx, aProxy, aId, result);
     ThrowPendingToV8(aCx);
-    return;
+    return v8::Intercepted::kYes;
   }
   aInfo.GetReturnValue().Set(result.ok());
+  return v8::Intercepted::kYes;
 }
 
 void EnumerateCommon(JSContext* aCx, JS::HandleObject aProxy, bool aIndexed,
@@ -212,9 +218,9 @@ void EnumerateCommon(JSContext* aCx, JS::HandleObject aProxy, bool aIndexed,
   aInfo.GetReturnValue().Set(v8::Array::New(isolate, out.data(), out.size()));
 }
 
-void DefineCommon(JSContext* aCx, JS::HandleObject aProxy, JS::HandleId aId,
+v8::Intercepted DefineCommon(JSContext* aCx, JS::HandleObject aProxy, JS::HandleId aId,
                   const v8::PropertyDescriptor& aDesc,
-                  const v8::PropertyCallbackInfo<v8::Value>& aInfo) {
+                  const v8::PropertyCallbackInfo<v8::Boolean>& aInfo) {
   JS::Rooted<JS::PropertyDescriptor> desc(aCx, JS::PropertyDescriptor::Empty());
   if (aDesc.has_value()) {
     JS::RootedValue value(aCx, ValueFromV8(aCx, aDesc.value()));
@@ -244,77 +250,81 @@ void DefineCommon(JSContext* aCx, JS::HandleObject aProxy, JS::HandleId aId,
   JS::ObjectOpResult result;
   if (!ProxyDefineProperty(aCx, aProxy, aId, desc, result)) {
     ThrowPendingToV8(aCx);
-    return;
+    return v8::Intercepted::kYes;
   }
   if (!result.ok() && aInfo.ShouldThrowOnError()) {
     ReportOpFailure(aCx, aProxy, aId, result);
     ThrowPendingToV8(aCx);
-    return;
+    return v8::Intercepted::kYes;
   }
-  aInfo.GetReturnValue().Set(true);
+  if (!result.ok()) {
+    aInfo.GetReturnValue().Set(false);
+  }
+  return v8::Intercepted::kYes;
 }
 
-void DescriptorCommon(JSContext* aCx, JS::HandleObject aProxy,
+v8::Intercepted DescriptorCommon(JSContext* aCx, JS::HandleObject aProxy,
                       JS::HandleId aId,
                       const v8::PropertyCallbackInfo<v8::Value>& aInfo) {
   JS::Rooted<mozilla::Maybe<JS::PropertyDescriptor>> desc(aCx);
   if (!ProxyGetOwnPropertyDescriptor(aCx, aProxy, aId, &desc)) {
     ThrowPendingToV8(aCx);
-    return;
+    return v8::Intercepted::kYes;
   }
   if (desc.isNothing()) {
-    return;
+    return v8::Intercepted::kNo;
   }
   JS::Rooted<JS::PropertyDescriptor> complete(aCx, *desc);
   aInfo.GetReturnValue().Set(DescriptorToV8(aCx, complete));
+  return v8::Intercepted::kYes;
 }
 
-void NamedGetter(v8::Local<v8::Name> aName,
+v8::Intercepted NamedGetter(v8::Local<v8::Name> aName,
                  const v8::PropertyCallbackInfo<v8::Value>& aInfo) {
   JSContext* cx = CurrentContext();
   InterceptorScope scope(cx, aInfo.Holder());
   JS::RootedId id(cx);
   if (!IdFromV8(cx, aName, &id)) {
     ThrowPendingToV8(cx);
-    return;
+    return v8::Intercepted::kYes;
   }
-  GetCommon(cx, scope.proxy, id, aInfo);
+  return GetCommon(cx, scope.proxy, id, aInfo);
 }
 
-void NamedSetter(v8::Local<v8::Name> aName, v8::Local<v8::Value> aValue,
-                 const v8::PropertyCallbackInfo<v8::Value>& aInfo) {
+v8::Intercepted NamedSetter(v8::Local<v8::Name> aName, v8::Local<v8::Value> aValue,
+                 const v8::PropertyCallbackInfo<v8::Boolean>& aInfo) {
   JSContext* cx = CurrentContext();
   InterceptorScope scope(cx, aInfo.Holder());
   JS::RootedId id(cx);
   if (!IdFromV8(cx, aName, &id)) {
     ThrowPendingToV8(cx);
-    return;
+    return v8::Intercepted::kYes;
   }
-  SetCommon(cx, scope.proxy, id, aValue, aInfo);
+  return SetCommon(cx, scope.proxy, id, aValue, aInfo);
 }
 
-void NamedQuery(v8::Local<v8::Name> aName,
+v8::Intercepted NamedQuery(v8::Local<v8::Name> aName,
                 const v8::PropertyCallbackInfo<v8::Integer>& aInfo) {
   JSContext* cx = CurrentContext();
   InterceptorScope scope(cx, aInfo.Holder());
   JS::RootedId id(cx);
   if (!IdFromV8(cx, aName, &id)) {
     ThrowPendingToV8(cx);
-    return;
+    return v8::Intercepted::kYes;
   }
-  QueryCommon(cx, scope.proxy, id, aInfo);
+  return QueryCommon(cx, scope.proxy, id, aInfo);
 }
 
-void NamedDeleter(v8::Local<v8::Name> aName,
+v8::Intercepted NamedDeleter(v8::Local<v8::Name> aName,
                   const v8::PropertyCallbackInfo<v8::Boolean>& aInfo) {
   JSContext* cx = CurrentContext();
   InterceptorScope scope(cx, aInfo.Holder());
   JS::RootedId id(cx);
   if (!IdFromV8(cx, aName, &id)) {
     ThrowPendingToV8(cx);
-    return;
+    return v8::Intercepted::kYes;
   }
-  DeleteCommon(cx, scope.proxy, id, aInfo);
+  return DeleteCommon(cx, scope.proxy, id, aInfo);
 }
 
 void NamedEnumerator(const v8::PropertyCallbackInfo<v8::Array>& aInfo) {
@@ -323,76 +333,76 @@ void NamedEnumerator(const v8::PropertyCallbackInfo<v8::Array>& aInfo) {
   EnumerateCommon(cx, scope.proxy, false, aInfo);
 }
 
-void NamedDefiner(v8::Local<v8::Name> aName, const v8::PropertyDescriptor& aDesc,
-                  const v8::PropertyCallbackInfo<v8::Value>& aInfo) {
+v8::Intercepted NamedDefiner(v8::Local<v8::Name> aName, const v8::PropertyDescriptor& aDesc,
+                  const v8::PropertyCallbackInfo<v8::Boolean>& aInfo) {
   JSContext* cx = CurrentContext();
   InterceptorScope scope(cx, aInfo.Holder());
   JS::RootedId id(cx);
   if (!IdFromV8(cx, aName, &id)) {
     ThrowPendingToV8(cx);
-    return;
+    return v8::Intercepted::kYes;
   }
-  DefineCommon(cx, scope.proxy, id, aDesc, aInfo);
+  return DefineCommon(cx, scope.proxy, id, aDesc, aInfo);
 }
 
-void NamedDescriptor(v8::Local<v8::Name> aName,
+v8::Intercepted NamedDescriptor(v8::Local<v8::Name> aName,
                      const v8::PropertyCallbackInfo<v8::Value>& aInfo) {
   JSContext* cx = CurrentContext();
   InterceptorScope scope(cx, aInfo.Holder());
   JS::RootedId id(cx);
   if (!IdFromV8(cx, aName, &id)) {
     ThrowPendingToV8(cx);
-    return;
+    return v8::Intercepted::kYes;
   }
-  DescriptorCommon(cx, scope.proxy, id, aInfo);
+  return DescriptorCommon(cx, scope.proxy, id, aInfo);
 }
 
-void IndexedGetter(uint32_t aIndex,
+v8::Intercepted IndexedGetter(uint32_t aIndex,
                    const v8::PropertyCallbackInfo<v8::Value>& aInfo) {
   JSContext* cx = CurrentContext();
   InterceptorScope scope(cx, aInfo.Holder());
   JS::RootedId id(cx);
   if (!IndexToId(cx, aIndex, &id)) {
     ThrowPendingToV8(cx);
-    return;
+    return v8::Intercepted::kYes;
   }
-  GetCommon(cx, scope.proxy, id, aInfo);
+  return GetCommon(cx, scope.proxy, id, aInfo);
 }
 
-void IndexedSetter(uint32_t aIndex, v8::Local<v8::Value> aValue,
-                   const v8::PropertyCallbackInfo<v8::Value>& aInfo) {
+v8::Intercepted IndexedSetter(uint32_t aIndex, v8::Local<v8::Value> aValue,
+                   const v8::PropertyCallbackInfo<v8::Boolean>& aInfo) {
   JSContext* cx = CurrentContext();
   InterceptorScope scope(cx, aInfo.Holder());
   JS::RootedId id(cx);
   if (!IndexToId(cx, aIndex, &id)) {
     ThrowPendingToV8(cx);
-    return;
+    return v8::Intercepted::kYes;
   }
-  SetCommon(cx, scope.proxy, id, aValue, aInfo);
+  return SetCommon(cx, scope.proxy, id, aValue, aInfo);
 }
 
-void IndexedQuery(uint32_t aIndex,
+v8::Intercepted IndexedQuery(uint32_t aIndex,
                   const v8::PropertyCallbackInfo<v8::Integer>& aInfo) {
   JSContext* cx = CurrentContext();
   InterceptorScope scope(cx, aInfo.Holder());
   JS::RootedId id(cx);
   if (!IndexToId(cx, aIndex, &id)) {
     ThrowPendingToV8(cx);
-    return;
+    return v8::Intercepted::kYes;
   }
-  QueryCommon(cx, scope.proxy, id, aInfo);
+  return QueryCommon(cx, scope.proxy, id, aInfo);
 }
 
-void IndexedDeleter(uint32_t aIndex,
+v8::Intercepted IndexedDeleter(uint32_t aIndex,
                     const v8::PropertyCallbackInfo<v8::Boolean>& aInfo) {
   JSContext* cx = CurrentContext();
   InterceptorScope scope(cx, aInfo.Holder());
   JS::RootedId id(cx);
   if (!IndexToId(cx, aIndex, &id)) {
     ThrowPendingToV8(cx);
-    return;
+    return v8::Intercepted::kYes;
   }
-  DeleteCommon(cx, scope.proxy, id, aInfo);
+  return DeleteCommon(cx, scope.proxy, id, aInfo);
 }
 
 void IndexedEnumerator(const v8::PropertyCallbackInfo<v8::Array>& aInfo) {
@@ -401,33 +411,33 @@ void IndexedEnumerator(const v8::PropertyCallbackInfo<v8::Array>& aInfo) {
   EnumerateCommon(cx, scope.proxy, true, aInfo);
 }
 
-void IndexedDefiner(uint32_t aIndex, const v8::PropertyDescriptor& aDesc,
-                    const v8::PropertyCallbackInfo<v8::Value>& aInfo) {
+v8::Intercepted IndexedDefiner(uint32_t aIndex, const v8::PropertyDescriptor& aDesc,
+                    const v8::PropertyCallbackInfo<v8::Boolean>& aInfo) {
   JSContext* cx = CurrentContext();
   InterceptorScope scope(cx, aInfo.Holder());
   JS::RootedId id(cx);
   if (!IndexToId(cx, aIndex, &id)) {
     ThrowPendingToV8(cx);
-    return;
+    return v8::Intercepted::kYes;
   }
-  DefineCommon(cx, scope.proxy, id, aDesc, aInfo);
+  return DefineCommon(cx, scope.proxy, id, aDesc, aInfo);
 }
 
-void IndexedDescriptor(uint32_t aIndex,
+v8::Intercepted IndexedDescriptor(uint32_t aIndex,
                        const v8::PropertyCallbackInfo<v8::Value>& aInfo) {
   JSContext* cx = CurrentContext();
   InterceptorScope scope(cx, aInfo.Holder());
   JS::RootedId id(cx);
   if (!IndexToId(cx, aIndex, &id)) {
     ThrowPendingToV8(cx);
-    return;
+    return v8::Intercepted::kYes;
   }
-  DescriptorCommon(cx, scope.proxy, id, aInfo);
+  return DescriptorCommon(cx, scope.proxy, id, aInfo);
 }
 
 void CallAsFunction(const v8::FunctionCallbackInfo<v8::Value>& aInfo) {
   JSContext* cx = CurrentContext();
-  InterceptorScope scope(cx, aInfo.Holder());
+  InterceptorScope scope(cx, aInfo.This());
   JS::HandleObject proxy = scope.proxy;
   unsigned argc = unsigned(aInfo.Length());
   bool constructing = aInfo.IsConstructCall();

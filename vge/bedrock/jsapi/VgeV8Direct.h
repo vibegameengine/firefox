@@ -26,11 +26,11 @@ inline ObjectCell* DirectCell(v8::Local<v8::Value> aValue) {
   }
   v8::Local<v8::Object> object = aValue.As<v8::Object>();
   if (object->InternalFieldCount() != 2 ||
-      object->GetAlignedPointerFromInternalField(0) != &kWrapperTypeTag) {
+      object->GetAlignedPointerFromInternalField(0, v8::kEmbedderDataTypeTagDefault) != &kWrapperTypeTag) {
     return nullptr;
   }
   Anchor* anchor =
-      static_cast<Anchor*>(object->GetAlignedPointerFromInternalField(1));
+      static_cast<Anchor*>(object->GetAlignedPointerFromInternalField(1, v8::kEmbedderDataTypeTagDefault));
   return anchor ? anchor->Cell() : nullptr;
 }
 
@@ -58,7 +58,7 @@ class DirectFrame {
   explicit DirectFrame(const DirectInfo& aInfo)
       : mCx(CurrentContext()), mOld(mCx->realm()) {
     Anchor* anchor = static_cast<Anchor*>(
-        aInfo.Data().As<v8::Object>()->GetAlignedPointerFromInternalField(1));
+        aInfo.Data().As<v8::Object>()->GetAlignedPointerFromInternalField(1, v8::kEmbedderDataTypeTagDefault));
     JS::Realm* realm = anchor->Cell()->shape->base.realm;
     mEntered = realm != mOld;
     if (mEntered) {
@@ -83,8 +83,7 @@ inline void DirectAssignString(v8::Isolate* aIsolate,
   v8::Local<v8::String> string = aValue.As<v8::String>();
   int length = string->Length();
   aOut.SetLength(length);
-  string->Write(aIsolate, reinterpret_cast<uint16_t*>(aOut.BeginWriting()), 0,
-                length, v8::String::NO_NULL_TERMINATION);
+  string->WriteV2(aIsolate, 0, uint32_t(length), reinterpret_cast<uint16_t*>(aOut.BeginWriting()));
 }
 
 inline bool DirectReturnString(JSContext* aCx, const DirectInfo& aInfo,

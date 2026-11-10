@@ -85,7 +85,7 @@ bool KindOf(v8::Local<v8::Context> aContext, v8::Local<v8::Value> aType,
   }
   v8::Local<v8::Value> tag;
   if (!aType.As<v8::Object>()
-           ->GetPrivate(aContext, TypeKey(aContext->GetIsolate()))
+           ->GetPrivate(aContext, TypeKey(v8::Isolate::GetCurrent()))
            .ToLocal(&tag) ||
       !tag->IsInt32()) {
     return false;
@@ -99,7 +99,7 @@ v8::Local<v8::Object> MakeType(v8::Local<v8::Context> aContext,
 
 void DefineType(v8::Local<v8::Context> aContext, v8::Local<v8::Object> aType,
                 const char* aName, CKind aKind, int aSize) {
-  v8::Isolate* isolate = aContext->GetIsolate();
+  v8::Isolate* isolate = v8::Isolate::GetCurrent();
   aType->SetPrivate(aContext, TypeKey(isolate), v8::Integer::New(isolate, int(aKind)))
       .Check();
   aType->Set(aContext, V8String(isolate, "name"), V8String(isolate, aName))
@@ -110,7 +110,7 @@ void DefineType(v8::Local<v8::Context> aContext, v8::Local<v8::Object> aType,
 
 v8::Local<v8::Object> MakeType(v8::Local<v8::Context> aContext,
                                const char* aName, CKind aKind, int aSize) {
-  v8::Isolate* isolate = aContext->GetIsolate();
+  v8::Isolate* isolate = v8::Isolate::GetCurrent();
   v8::Local<v8::Object> type = v8::Object::New(isolate);
   DefineType(aContext, type, aName, aKind, aSize);
   if (aKind != CKind::Void && aKind != CKind::Pointer) {
@@ -191,7 +191,7 @@ bool ToArg(JSContext* aCx, v8::Local<v8::Context> aContext, CKind aKind,
            v8::Local<v8::Value> aValue, uint64_t* aOut,
            std::vector<std::string>* aUtf8Keep,
            std::vector<std::u16string>* aUtf16Keep) {
-  v8::Isolate* isolate = aContext->GetIsolate();
+  v8::Isolate* isolate = v8::Isolate::GetCurrent();
   switch (aKind) {
     case CKind::Float32:
     case CKind::Float64: {
@@ -277,7 +277,7 @@ void CallDeclared(const v8::FunctionCallbackInfo<v8::Value>& aInfo) {
   v8::Isolate* isolate = aInfo.GetIsolate();
   v8::Local<v8::Context> context = isolate->GetCurrentContext();
   Declared* declared =
-      static_cast<Declared*>(aInfo.Data().As<v8::External>()->Value());
+      static_cast<Declared*>(aInfo.Data().As<v8::External>()->Value(v8::kExternalPointerTypeTagDefault));
   if (size_t(aInfo.Length()) != declared->argKinds.size()) {
     Throw(isolate, "ctypes: wrong number of arguments");
     return;
@@ -327,12 +327,12 @@ HMODULE LibraryOf(v8::Local<v8::Context> aContext, v8::Local<v8::Value> aThis) {
   }
   v8::Local<v8::Value> handle;
   if (!aThis.As<v8::Object>()
-           ->GetPrivate(aContext, HandleKey(aContext->GetIsolate()))
+           ->GetPrivate(aContext, HandleKey(v8::Isolate::GetCurrent()))
            .ToLocal(&handle) ||
       !handle->IsExternal()) {
     return nullptr;
   }
-  return static_cast<HMODULE>(handle.As<v8::External>()->Value());
+  return static_cast<HMODULE>(handle.As<v8::External>()->Value(v8::kExternalPointerTypeTagDefault));
 }
 
 void LibraryClose(const v8::FunctionCallbackInfo<v8::Value>& aInfo) {
@@ -387,7 +387,7 @@ void LibraryDeclare(const v8::FunctionCallbackInfo<v8::Value>& aInfo) {
   }
   v8::Local<v8::Function> callable;
   if (!v8::Function::New(context, CallDeclared,
-                         v8::External::New(isolate, declared),
+                         v8::External::New(isolate, declared, v8::kExternalPointerTypeTagDefault),
                          int(declared->argKinds.size()),
                          v8::ConstructorBehavior::kThrow)
            .ToLocal(&callable)) {
@@ -413,7 +413,7 @@ void CTypesOpen(const v8::FunctionCallbackInfo<v8::Value>& aInfo) {
     return;
   }
   v8::Local<v8::Object> library = v8::Object::New(isolate);
-  library->SetPrivate(context, HandleKey(isolate), v8::External::New(isolate, module))
+  library->SetPrivate(context, HandleKey(isolate), v8::External::New(isolate, module, v8::kExternalPointerTypeTagDefault))
       .Check();
   v8::Local<v8::Function> close;
   v8::Local<v8::Function> declare;

@@ -180,11 +180,11 @@ bool IdFromV8(JSContext* aCx, v8::Local<v8::Value> aKey,
               JS::MutableHandleId aResult);
 v8::Local<v8::Value> ToV8(JSContext* aCx, jsid aId);
 
-class Anchor final : public cppgc::GarbageCollected<Anchor> {
+class Anchor final : public v8::Object::Wrappable {
  public:
   explicit Anchor(ObjectCell* aCell) : mCell(aCell) {}
   ~Anchor();
-  void Trace(cppgc::Visitor* aVisitor) const;
+  void Trace(cppgc::Visitor* aVisitor) const override;
   ObjectCell* Cell() const { return mCell; }
   void TraceSlotValue(cppgc::Visitor* aVisitor, const JS::Value& aValue) const;
   void SetWrapper(v8::Isolate* aIsolate, v8::Local<v8::Object> aWrapper);
@@ -194,7 +194,8 @@ class Anchor final : public cppgc::GarbageCollected<Anchor> {
   v8::TracedReference<v8::Object> mWrapper;
 };
 
-constexpr uint16_t kAnchorWrapperClassId = 1;
+constexpr v8::CppHeapPointerTag kAnchorTag =
+    v8::CppHeapPointerTag::kFirstEmbedderWrappableTag;
 
 }
 
@@ -202,7 +203,7 @@ struct JSRuntime {
   JSRuntime();
 
   v8::Isolate* isolate = nullptr;
-  std::unique_ptr<v8::CppHeap> cppHeap;
+  v8::CppHeap* cppHeap = nullptr;
   JSContext* mainContext = nullptr;
   JS::Zone* zone = nullptr;
   vge::jsapi::CellPool cellPools[2];

@@ -104,7 +104,7 @@ bool HasPropertyHooks(const JSClass* aClass) {
 }
 
 const JSClass* ClassOfData(v8::Local<v8::Value> aData) {
-  return static_cast<const JSClass*>(aData.As<v8::External>()->Value());
+  return static_cast<const JSClass*>(aData.As<v8::External>()->Value(v8::kExternalPointerTypeTagDefault));
 }
 
 bool ResolveOwn(JSContext* aCx, JS::HandleObject aObj, const JSClass* aClass,
@@ -203,29 +203,31 @@ void LookupHook(v8::Local<v8::Object> aHolder, v8::Local<v8::Value> aKey,
   }
 }
 
-void QueryHook(v8::Local<v8::Object> aHolder, v8::Local<v8::Value> aKey,
+bool QueryHook(v8::Local<v8::Object> aHolder, v8::Local<v8::Value> aKey,
                v8::Local<v8::Name> aName, v8::Local<v8::Value> aData,
                const v8::PropertyCallbackInfo<v8::Integer>& aInfo) {
   JSContext* cx = CurrentContext();
   v8::Local<v8::Context> ctx = cx->isolate->GetCurrentContext();
   if (HasOwnReal(ctx, aHolder, aKey)) {
-    return;
+    return false;
   }
   {
     HookCall call(cx, aHolder, aKey, aData);
     if (!ResolveOwn(cx, call.obj, call.clasp, call.id)) {
       ThrowPendingToV8(cx);
-      return;
+      return false;
     }
   }
   if (!HasOwnReal(ctx, aHolder, aKey)) {
-    return;
+    return false;
   }
   v8::Maybe<v8::PropertyAttribute> attrs =
       aHolder->GetRealNamedPropertyAttributes(ctx, aName);
-  if (attrs.IsJust()) {
-    aInfo.GetReturnValue().Set(int32_t(attrs.FromJust()));
+  if (attrs.IsNothing()) {
+    return false;
   }
+  aInfo.GetReturnValue().Set(int32_t(attrs.FromJust()));
+  return true;
 }
 
 void AddHook(v8::Local<v8::Object> aHolder, v8::Local<v8::Value> aKey,
@@ -254,7 +256,7 @@ void AddHook(v8::Local<v8::Object> aHolder, v8::Local<v8::Value> aKey,
   }
 }
 
-void DeleteHook(v8::Local<v8::Object> aHolder, v8::Local<v8::Value> aKey,
+bool DeleteHook(v8::Local<v8::Object> aHolder, v8::Local<v8::Value> aKey,
                 v8::Local<v8::Name> aName, v8::Local<v8::Value> aData,
                 const v8::PropertyCallbackInfo<v8::Boolean>& aInfo) {
   JSContext* cx = CurrentContext();
@@ -263,29 +265,31 @@ void DeleteHook(v8::Local<v8::Object> aHolder, v8::Local<v8::Value> aKey,
   if (!HasOwnReal(ctx, aHolder, aKey)) {
     if (!ResolveOwn(cx, call.obj, call.clasp, call.id)) {
       ThrowPendingToV8(cx);
-      return;
+      return false;
     }
     if (!HasOwnReal(ctx, aHolder, aKey)) {
-      return;
+      return false;
     }
   }
   JSDeletePropertyOp del = call.clasp->getDelProperty();
   if (!del) {
-    return;
+    return false;
   }
   v8::Maybe<v8::PropertyAttribute> attrs =
       aHolder->GetRealNamedPropertyAttributes(ctx, aName);
   if (attrs.IsJust() && (attrs.FromJust() & v8::DontDelete)) {
-    return;
+    return false;
   }
   JS::ObjectOpResult result;
   if (!del(cx, call.obj, call.id, result)) {
     ThrowPendingToV8(cx);
-    return;
+    return false;
   }
-  if (!result.ok()) {
-    aInfo.GetReturnValue().Set(false);
+  if (result.ok()) {
+    return false;
   }
+  aInfo.GetReturnValue().Set(false);
+  return true;
 }
 
 void EnumerateHook(v8::Local<v8::Object> aHolder, v8::Local<v8::Value> aData,
@@ -333,84 +337,108 @@ v8::Local<v8::Value> DescriptorValue(const v8::PropertyDescriptor& aDesc,
   return v8::Undefined(aIsolate);
 }
 
-void NamedGetter(v8::Local<v8::Name> aName,
-                 const v8::PropertyCallbackInfo<v8::Value>& aInfo) {
-  LookupHook(aInfo.Holder(), aName, aInfo.Data());
+v8::Intercepted Intercept(bool aIntercepted) {
+  return aIntercepted ? v8::Intercepted::kYes : v8::Intercepted::kNo;
 }
 
-void NonMaskingNamedGetter(v8::Local<v8::Name> aName,
-                           const v8::PropertyCallbackInfo<v8::Value>& aInfo) {
+v8::Intercepted NamedGetter(v8::Local<v8::Name> aName,
+                            const v8::PropertyCallbackInfo<v8::Value>& aInfo) {
+  LookupHook(aInfo.Holder(), aName, aInfo.Data());
+  return v8::Intercepted::kNo;
+}
+
+v8::Intercepted NonMaskingNamedGetter(
+    v8::Local<v8::Name> aName,
+    const v8::PropertyCallbackInfo<v8::Value>& aInfo) {
   v8::Local<v8::Object> holder = aInfo.Holder();
   LookupHook(holder, aName, aInfo.Data());
   v8::Isolate* isolate = aInfo.GetIsolate();
   v8::Local<v8::Context> ctx = isolate->GetCurrentContext();
   if (!HasOwnReal(ctx, holder, aName)) {
-    return;
+    return v8::Intercepted::kNo;
   }
   v8::Local<v8::Value> value;
-  if (holder->GetRealNamedProperty(ctx, aName).ToLocal(&value)) {
-    aInfo.GetReturnValue().Set(value);
+  if (!holder->GetRealNamedProperty(ctx, aName).ToLocal(&value)) {
+    return v8::Intercepted::kNo;
   }
+  aInfo.GetReturnValue().Set(value);
+  return v8::Intercepted::kYes;
 }
 
-void NamedSetter(v8::Local<v8::Name> aName, v8::Local<v8::Value> aValue,
-                 const v8::PropertyCallbackInfo<v8::Value>& aInfo) {
+v8::Intercepted NamedSetter(
+    v8::Local<v8::Name> aName, v8::Local<v8::Value> aValue,
+    const v8::PropertyCallbackInfo<v8::Boolean>& aInfo) {
   AddHook(aInfo.Holder(), aName, aValue, aInfo.Data(), true);
+  return v8::Intercepted::kNo;
 }
 
-void NamedQuery(v8::Local<v8::Name> aName,
-                const v8::PropertyCallbackInfo<v8::Integer>& aInfo) {
-  QueryHook(aInfo.Holder(), aName, aName, aInfo.Data(), aInfo);
+v8::Intercepted NamedQuery(
+    v8::Local<v8::Name> aName,
+    const v8::PropertyCallbackInfo<v8::Integer>& aInfo) {
+  return Intercept(
+      QueryHook(aInfo.Holder(), aName, aName, aInfo.Data(), aInfo));
 }
 
-void NamedDeleter(v8::Local<v8::Name> aName,
-                  const v8::PropertyCallbackInfo<v8::Boolean>& aInfo) {
-  DeleteHook(aInfo.Holder(), aName, aName, aInfo.Data(), aInfo);
+v8::Intercepted NamedDeleter(
+    v8::Local<v8::Name> aName,
+    const v8::PropertyCallbackInfo<v8::Boolean>& aInfo) {
+  return Intercept(
+      DeleteHook(aInfo.Holder(), aName, aName, aInfo.Data(), aInfo));
 }
 
 void NamedEnumerator(const v8::PropertyCallbackInfo<v8::Array>& aInfo) {
   EnumerateHook(aInfo.Holder(), aInfo.Data(), false, aInfo);
 }
 
-void NamedDefiner(v8::Local<v8::Name> aName,
-                  const v8::PropertyDescriptor& aDesc,
-                  const v8::PropertyCallbackInfo<v8::Value>& aInfo) {
+v8::Intercepted NamedDefiner(
+    v8::Local<v8::Name> aName, const v8::PropertyDescriptor& aDesc,
+    const v8::PropertyCallbackInfo<v8::Boolean>& aInfo) {
   AddHook(aInfo.Holder(), aName, DescriptorValue(aDesc, aInfo.GetIsolate()),
           aInfo.Data(), false);
+  return v8::Intercepted::kNo;
 }
 
-void IndexedGetter(uint32_t aIndex,
-                   const v8::PropertyCallbackInfo<v8::Value>& aInfo) {
+v8::Intercepted IndexedGetter(
+    uint32_t aIndex, const v8::PropertyCallbackInfo<v8::Value>& aInfo) {
   LookupHook(aInfo.Holder(), IndexKey(aInfo.GetIsolate(), aIndex),
              aInfo.Data());
+  return v8::Intercepted::kNo;
 }
 
-void IndexedSetter(uint32_t aIndex, v8::Local<v8::Value> aValue,
-                   const v8::PropertyCallbackInfo<v8::Value>& aInfo) {
+v8::Intercepted IndexedSetter(
+    uint32_t aIndex, v8::Local<v8::Value> aValue,
+    const v8::PropertyCallbackInfo<v8::Boolean>& aInfo) {
   AddHook(aInfo.Holder(), IndexKey(aInfo.GetIsolate(), aIndex), aValue,
           aInfo.Data(), true);
+  return v8::Intercepted::kNo;
 }
 
-void IndexedQuery(uint32_t aIndex,
-                  const v8::PropertyCallbackInfo<v8::Integer>& aInfo) {
-  QueryHook(aInfo.Holder(), IndexKey(aInfo.GetIsolate(), aIndex),
-            IndexName(aInfo.GetIsolate(), aIndex), aInfo.Data(), aInfo);
+v8::Intercepted IndexedQuery(
+    uint32_t aIndex, const v8::PropertyCallbackInfo<v8::Integer>& aInfo) {
+  return Intercept(QueryHook(aInfo.Holder(),
+                             IndexKey(aInfo.GetIsolate(), aIndex),
+                             IndexName(aInfo.GetIsolate(), aIndex),
+                             aInfo.Data(), aInfo));
 }
 
-void IndexedDeleter(uint32_t aIndex,
-                    const v8::PropertyCallbackInfo<v8::Boolean>& aInfo) {
-  DeleteHook(aInfo.Holder(), IndexKey(aInfo.GetIsolate(), aIndex),
-             IndexName(aInfo.GetIsolate(), aIndex), aInfo.Data(), aInfo);
+v8::Intercepted IndexedDeleter(
+    uint32_t aIndex, const v8::PropertyCallbackInfo<v8::Boolean>& aInfo) {
+  return Intercept(DeleteHook(aInfo.Holder(),
+                              IndexKey(aInfo.GetIsolate(), aIndex),
+                              IndexName(aInfo.GetIsolate(), aIndex),
+                              aInfo.Data(), aInfo));
 }
 
 void IndexedEnumerator(const v8::PropertyCallbackInfo<v8::Array>& aInfo) {
   EnumerateHook(aInfo.Holder(), aInfo.Data(), true, aInfo);
 }
 
-void IndexedDefiner(uint32_t aIndex, const v8::PropertyDescriptor& aDesc,
-                    const v8::PropertyCallbackInfo<v8::Value>& aInfo) {
+v8::Intercepted IndexedDefiner(
+    uint32_t aIndex, const v8::PropertyDescriptor& aDesc,
+    const v8::PropertyCallbackInfo<v8::Boolean>& aInfo) {
   AddHook(aInfo.Holder(), IndexKey(aInfo.GetIsolate(), aIndex),
           DescriptorValue(aDesc, aInfo.GetIsolate()), aInfo.Data(), false);
+  return v8::Intercepted::kNo;
 }
 
 void CallHook(const v8::FunctionCallbackInfo<v8::Value>& aInfo) {
@@ -418,7 +446,7 @@ void CallHook(const v8::FunctionCallbackInfo<v8::Value>& aInfo) {
   const JSClass* clasp = ClassOfData(aInfo.Data());
   bool constructing = aInfo.IsConstructCall();
   JSNative native = constructing ? clasp->getConstruct() : clasp->getCall();
-  v8::Local<v8::Object> callee = aInfo.Holder();
+  v8::Local<v8::Object> callee = aInfo.This();
   JSObject* obj = ObjectFromV8(cx, callee);
   if (!native) {
     ReportJSError(cx, constructing ? JSMSG_NOT_CONSTRUCTOR : JSMSG_NOT_FUNCTION,
@@ -593,9 +621,14 @@ void AnchorCellOn(JSContext* aCx, ObjectCell* aCell,
     aCell->tail.anchor = cppgc::MakeGarbageCollected<Anchor>(
         aCx->isolate->GetCppHeap()->GetAllocationHandle(), aCell);
   }
-  aHolder->SetAlignedPointerInInternalField(
-      0, const_cast<WrapperTypeTag*>(&kWrapperTypeTag));
-  aHolder->SetAlignedPointerInInternalField(1, aCell->tail.anchor);
+  if (aHolder->InternalFieldCount() == 2) {
+    aHolder->SetAlignedPointerInInternalField(
+        0, const_cast<WrapperTypeTag*>(&kWrapperTypeTag),
+        v8::kEmbedderDataTypeTagDefault);
+    aHolder->SetAlignedPointerInInternalField(1, aCell->tail.anchor,
+                                              v8::kEmbedderDataTypeTagDefault);
+  }
+  v8::Object::Wrap(aCx->isolate, aHolder, aCell->tail.anchor, kAnchorTag);
   aCell->tail.anchor->SetWrapper(aCx->isolate, aHolder);
 }
 
@@ -649,13 +682,13 @@ v8::Local<v8::FunctionTemplate> ClassTemplate(JSContext* aCx,
   v8::Local<v8::ObjectTemplate> inst = ft->InstanceTemplate();
   inst->SetInternalFieldCount(2);
   v8::Local<v8::Value> data =
-      v8::External::New(isolate, const_cast<JSClass*>(aClass));
+      v8::External::New(isolate, const_cast<JSClass*>(aClass), v8::kExternalPointerTypeTagDefault);
   if (HasPropertyHooks(aClass)) {
     bool isWindow = aClass->name && !strcmp(aClass->name, "Window");
     inst->SetHandler(v8::NamedPropertyHandlerConfiguration(
         isWindow ? NonMaskingNamedGetter : NamedGetter, NamedSetter, NamedQuery,
         NamedDeleter, NamedEnumerator, NamedDefiner,
-        static_cast<v8::GenericNamedPropertyDescriptorCallback>(nullptr), data,
+        static_cast<v8::NamedPropertyDescriptorCallback>(nullptr), data,
         isWindow ? v8::PropertyHandlerFlags::kNonMasking
                  : v8::PropertyHandlerFlags::kNone));
     inst->SetHandler(v8::IndexedPropertyHandlerConfiguration(
@@ -694,7 +727,7 @@ JSObject* NewClassObject(JSContext* aCx, const JSClass* aClass,
   Shape* shape = ShapeFor(aClass, aCx->realm());
   ObjectCell* cell = NewObjectCell(aCx, shape, object, true);
   object->SetAlignedPointerInInternalField(
-      0, const_cast<WrapperTypeTag*>(&kWrapperTypeTag));
+      0, const_cast<WrapperTypeTag*>(&kWrapperTypeTag), v8::kEmbedderDataTypeTagDefault);
   return cell->asObject();
 }
 

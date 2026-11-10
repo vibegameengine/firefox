@@ -43,7 +43,7 @@ void NativeFunctionCallback(const v8::FunctionCallbackInfo<v8::Value>& aInfo) {
   JSContext* cx = CurrentContext();
   v8::Local<v8::Object> holder = aInfo.Data().As<v8::Object>();
   Anchor* anchor =
-      static_cast<Anchor*>(holder->GetAlignedPointerFromInternalField(1));
+      static_cast<Anchor*>(holder->GetAlignedPointerFromInternalField(1, v8::kEmbedderDataTypeTagDefault));
   ObjectCell* cell = anchor->Cell();
   JSNative native =
       reinterpret_cast<JSNative>(cell->fixedSlots()[kNativeSlot].toPrivate());

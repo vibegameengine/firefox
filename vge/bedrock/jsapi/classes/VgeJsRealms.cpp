@@ -1,5 +1,7 @@
 #include "VgeJsClassesState.h"
 
+#include "v8-gray-marking.h"
+
 #include <algorithm>
 
 #include "js/RealmIterators.h"
@@ -45,7 +47,7 @@ void StoreFunction(v8::Isolate* aIsolate, v8::Global<v8::Function>& aSlot,
 
 v8::Local<v8::Value> RealGet(v8::Local<v8::Context> aContext,
                              v8::Local<v8::Object> aObject, const char* aName) {
-  v8::Isolate* isolate = aContext->GetIsolate();
+  v8::Isolate* isolate = v8::Isolate::GetCurrent();
   v8::Local<v8::Value> value;
   if (aObject.IsEmpty() ||
       !aObject
@@ -59,7 +61,7 @@ v8::Local<v8::Value> RealGet(v8::Local<v8::Context> aContext,
 
 void DeleteGlobal(v8::Local<v8::Context> aContext, v8::Local<v8::Object> aGlobal,
                   const char* aName) {
-  v8::Isolate* isolate = aContext->GetIsolate();
+  v8::Isolate* isolate = v8::Isolate::GetCurrent();
   aGlobal->Delete(aContext, v8::String::NewFromUtf8(isolate, aName).ToLocalChecked())
       .FromMaybe(false);
 }
@@ -477,8 +479,8 @@ void KeepRealmIntrinsics(JSContext* aCx, JS::Realm* aRealm,
   for (auto& [name, fn] : extra.selfHosted) {
     keep(fn);
   }
-  v8::Local<v8::Object> inner = extra.innerGlobal.Get(isolate);
-  inner
+  v8::Local<v8::Object> global = extra.innerGlobal.Get(isolate);
+  global
       ->SetPrivate(aContext, RealmPrivateKey(isolate, "vge.jsapi.realm.intrinsics"),
                    v8::Array::New(isolate, kept.data(), kept.size()))
       .Check();
@@ -605,7 +607,7 @@ JS::Realm* RealmOfV8Context(JSContext* aCx, v8::Local<v8::Context> aContext) {
     return nullptr;
   }
   return static_cast<JS::Realm*>(
-      aContext->GetAlignedPointerFromEmbedderData(kRealmEmbedderIndex));
+      aContext->GetAlignedPointerFromEmbedderData(kRealmEmbedderIndex, v8::kEmbedderDataTypeTagDefault));
 }
 
 }
@@ -661,20 +663,26 @@ JSObject* JS_NewGlobalObject(JSContext* aCx, const JSClass* aClass,
   comp->realms.push_back(realm);
   rt->realms.push_back(realm);
   ctx->SetSecurityToken(state.securityToken.Get(isolate));
-  ctx->SetAlignedPointerInEmbedderData(kRealmEmbedderIndex, realm);
+  ctx->SetAlignedPointerInEmbedderData(kRealmEmbedderIndex, realm, v8::kEmbedderDataTypeTagDefault);
   realm->context.Reset(isolate, ctx);
   WatchRealmContext(realm);
 
   JS::Realm* old = aCx->realm();
   aCx->enterRealm(realm);
   v8::Local<v8::Object> proxy = ctx->Global();
-  v8::Local<v8::Object> inner = proxy->GetPrototype().As<v8::Object>();
+  v8::Local<v8::Object> inner =
+      v8::InnerGlobalOfProxy(isolate, proxy).As<v8::Object>();
   ObjectCell* cell = NewObjectCell(aCx, ShapeFor(aClass, realm), proxy, true);
   proxy->SetAlignedPointerInInternalField(
-      0, const_cast<WrapperTypeTag*>(&kWrapperTypeTag));
-  inner->SetPrivate(ctx, rt->cellKey.Get(isolate), v8::External::New(isolate, cell))
+      0, const_cast<WrapperTypeTag*>(&kWrapperTypeTag),
+      v8::kEmbedderDataTypeTagDefault);
+  inner
+      ->SetPrivate(ctx, rt->cellKey.Get(isolate),
+                   v8::External::New(isolate, cell,
+                                     v8::kExternalPointerTypeTagDefault))
       .Check();
-  AnchorCellOn(aCx, cell, inner);
+  v8::Object::WrapGlobal(isolate, proxy, cell->tail.anchor, kAnchorTag);
+  cell->tail.anchor->SetWrapper(isolate, inner);
   realm->global = cell->asObject();
   realm->globalClass = aClass;
   RealmExtra& extra = RealmData(realm);

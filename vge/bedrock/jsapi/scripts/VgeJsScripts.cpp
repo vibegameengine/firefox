@@ -285,7 +285,7 @@ v8::ScriptOrigin OriginFor(v8::Isolate* aIsolate, const ScriptData* aData,
                          aData->sourceMapURL.size());
   }
   return v8::ScriptOrigin(
-      aIsolate, V8String(aIsolate, aData->filename.c_str()),
+      V8String(aIsolate, aData->filename.c_str()),
       int(aData->lineno) - 1, int(aData->column) - 1, !aData->mutedErrors, -1,
       sourceMap, false, false, aIsModule, hostDefined);
 }

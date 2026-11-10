@@ -501,7 +501,6 @@ void Anchor::Trace(cppgc::Visitor* aVisitor) const {
 void Anchor::SetWrapper(v8::Isolate* aIsolate,
                         v8::Local<v8::Object> aWrapper) {
   mWrapper.Reset(aIsolate, aWrapper);
-  mWrapper.SetWrapperClassId(kAnchorWrapperClassId);
 }
 
 JSRuntime* Runtime() {
@@ -606,13 +605,7 @@ const char* JS::detail::InitWithFailureDiagnostic(
     return "vge jsapi: thread-local context";
   }
   static const char kUnfrozenFlags[] =
-      "--no-freeze-flags-after-init --no-cppheap-concurrent-marking "
-      "--js-promise-withresolvers "
-      "--harmony-array-from-async --harmony-iterator-helpers "
-      "--harmony-set-methods --harmony-array-grouping --harmony-rab-gsab "
-      "--harmony-rab-gsab-transfer --harmony-change-array-by-copy "
-      "--harmony-string-is-well-formed --harmony-import-attributes "
-      "--harmony-json-parse-with-source --harmony-regexp-unicode-sets";
+      "--no-freeze-flags-after-init --no-cppheap-concurrent-marking";
   v8::V8::SetFlagsFromString(kUnfrozenFlags, sizeof(kUnfrozenFlags) - 1);
   if (const char* extraFlags = getenv("VGE_V8_FLAGS")) {
     v8::V8::SetFlagsFromString(extraFlags);
@@ -650,6 +643,10 @@ JSContext* JS_NewContext(uint32_t aMaxBytes, JSRuntime* aParentRuntime) {
   v8::Isolate::CreateParams params;
   params.array_buffer_allocator =
       v8::ArrayBuffer::Allocator::NewDefaultAllocator();
+  rt->cppHeap =
+      v8::CppHeap::Create(sPlatform.get(), v8::CppHeapCreateParams({}))
+          .release();
+  params.cpp_heap = rt->cppHeap;
   rt->isolate = v8::Isolate::Allocate();
   AttachIsolateToCurrentThread(sPlatform.get(), rt->isolate);
   v8::Isolate::Initialize(rt->isolate, params);
@@ -664,10 +661,6 @@ JSContext* JS_NewContext(uint32_t aMaxBytes, JSRuntime* aParentRuntime) {
       RegisterJitCodeRegion(static_cast<uint8_t*>(codeStart), codeSize);
     }
   }
-  rt->cppHeap = v8::CppHeap::Create(
-      sPlatform.get(),
-      v8::CppHeapCreateParams({}, v8::WrapperDescriptor(0, 1, kWrapperEmbedderId)));
-  rt->isolate->AttachCppHeap(rt->cppHeap.get());
   rt->zone = new JS::Zone(rt);
   JSContext* cx = new JSContext(rt);
   rt->mainContext = cx;
@@ -696,8 +689,6 @@ void JS_DestroyContext(JSContext* aCx) {
   DrainDeferredObjectFrees(rt, SIZE_MAX);
   rt->cellKey.Reset();
   rt->slotsKey.Reset();
-  rt->isolate->DetachCppHeap();
-  rt->cppHeap.reset();
   std::vector<JS::Realm*> realms = rt->realms;
   for (JS::Realm* realm : realms) {
     DestroyRealm(rt, realm, true);
@@ -706,6 +697,7 @@ void JS_DestroyContext(JSContext* aCx) {
   DetachIsolate(sPlatform.get(), rt->isolate);
   rt->isolate->Exit();
   rt->isolate->Dispose();
+  rt->cppHeap = nullptr;
   ReleaseCellChunks(rt);
   tlsContext.set(nullptr);
   delete aCx;
