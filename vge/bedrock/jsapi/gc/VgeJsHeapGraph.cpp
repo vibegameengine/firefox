@@ -338,27 +338,36 @@ std::unordered_map<js::gc::Cell*, std::vector<JS::GCCellPtr>> ExpandCellEdges(
 
 void CollectCellEdges(GcState& aState, const v8::GrayMarkingResult& aResult,
                       std::vector<JS::GCCellPtr>&& aCellAt,
-                      std::vector<v8::GrayMarkingEdge>& aEdges) {
-  size_t nodeCount = aCellAt.size();
-  auto indexOf = [&](uintptr_t aAddress) {
-    return aResult.GrayIndexOf(aAddress);
-  };
-  std::vector<uint32_t> offsets(nodeCount + 1, 0);
-  for (const v8::GrayMarkingEdge& edge : aEdges) {
-    offsets[indexOf(edge.from) + 1]++;
-  }
-  for (size_t i = 0; i < nodeCount; i++) {
-    offsets[i + 1] += offsets[i];
-  }
-  std::vector<uint32_t> targets(aEdges.size());
-  std::vector<uint32_t> fill(offsets.begin(), offsets.end() - 1);
-  for (const v8::GrayMarkingEdge& edge : aEdges) {
-    targets[fill[indexOf(edge.from)]++] = indexOf(edge.to);
-  }
+                      std::vector<v8::GrayMarkingEdge>&& aEdges) {
+  size_t grayCount = 0;
+  const uintptr_t* grayObjects = aResult.GrayObjects(&grayCount);
+  std::vector<uintptr_t> addresses(grayObjects, grayObjects + grayCount);
   aState.pendingCellEdges = std::async(
       std::launch::async,
-      [cellAt = std::move(aCellAt), offsets = std::move(offsets),
-       targets = std::move(targets)]() {
+      [cellAt = std::move(aCellAt), addresses = std::move(addresses),
+       edges = std::move(aEdges)]() {
+        std::unordered_map<uintptr_t, uint32_t> indexOf;
+        indexOf.reserve(addresses.size() * 2);
+        for (uint32_t i = 0; i < addresses.size(); i++) {
+          indexOf.emplace(addresses[i], i);
+        }
+        size_t nodeCount = cellAt.size();
+        std::vector<uint32_t> fromIndex(edges.size());
+        std::vector<uint32_t> toIndex(edges.size());
+        std::vector<uint32_t> offsets(nodeCount + 1, 0);
+        for (size_t e = 0; e < edges.size(); e++) {
+          fromIndex[e] = indexOf[edges[e].from];
+          toIndex[e] = indexOf[edges[e].to];
+          offsets[fromIndex[e] + 1]++;
+        }
+        for (size_t i = 0; i < nodeCount; i++) {
+          offsets[i + 1] += offsets[i];
+        }
+        std::vector<uint32_t> targets(edges.size());
+        std::vector<uint32_t> fill(offsets.begin(), offsets.end() - 1);
+        for (size_t e = 0; e < edges.size(); e++) {
+          targets[fill[fromIndex[e]]++] = toIndex[e];
+        }
         return ExpandCellEdges(cellAt, offsets, targets);
       });
 }
@@ -407,7 +416,7 @@ class CellGrayMarkingClient final : public v8::GrayMarkingClient {
     std::vector<v8::GrayMarkingEdge> allEdges(edges, edges + edgeCount);
     CollectWeakEntries(mState, aResult, cells, allEdges);
     mozilla::TimeStamp weak = mozilla::TimeStamp::Now();
-    CollectCellEdges(mState, aResult, std::move(cellAt), allEdges);
+    CollectCellEdges(mState, aResult, std::move(cellAt), std::move(allEdges));
     mState.grayBitsValid = true;
     static const bool sLog = !!getenv("VGE_GC_LOG");
     if (sLog) {
