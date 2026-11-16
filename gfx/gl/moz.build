@@ -134,6 +134,7 @@ UNIFIED_SOURCES += [
     "SharedSurface.cpp",
     "SharedSurfaceEGL.cpp",
     "SharedSurfaceGL.cpp",
+    "VgeShaderDiskCache.cpp",
 ]
 SOURCES += [
     "GLScreenBuffer.cpp",

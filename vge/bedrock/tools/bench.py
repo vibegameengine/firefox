@@ -126,12 +126,12 @@ def main():
     trace_path = RESULTS / f"{args.label}.trace.txt"
     if args.profile:
         env["MOZ_PROFILER_STARTUP"] = "1"
-        env["MOZ_PROFILER_STARTUP_ENTRIES"] = "4000000"
+        env["MOZ_PROFILER_STARTUP_ENTRIES"] = "16000000"
         env["MOZ_PROFILER_STARTUP_INTERVAL"] = "4"
         env["MOZ_PROFILER_STARTUP_FEATURES"] = "stackwalk,nativeallocations" if args.alloc else "stackwalk"
         env["MOZ_PROFILER_STARTUP_FILTERS"] = "GeckoMain,Compositor,Renderer,WRRenderBackend"
         env["VGE_PROFILE"] = str(RESULTS / f"{args.label}.profile.json").replace("/", "\\")
-        env["VGE_PROFILE_DELAY"] = str(max(args.seconds - 45, 5))
+        env["VGE_PROFILE_DELAY"] = str(max(args.seconds - 8, 5))
     if args.trace:
         env["VGE_ALLOC_TRACE"] = str(trace_path).replace("/", "\\")
         env["VGE_ALLOC_TRACE_DELAY"] = str(max(args.seconds - 15, 5))

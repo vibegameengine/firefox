@@ -33,6 +33,7 @@
 #include "GLReadTexImageHelper.h"
 #include "OGLShaderProgram.h"
 #include "ScopedGLHelpers.h"
+#include "VgeShaderDiskCache.h"
 #include "prenv.h"
 #include "prsystem.h"
 #ifdef MOZ_WIDGET_GTK
@@ -899,6 +900,7 @@ EglDisplay::EglDisplay(const PrivateUseOnly&, GLLibraryEGL& lib,
   }
   MarkExtensions(rawExtString, shouldDumpExts, "display", sEGLExtensionNames,
                  &mAvailableExtensions);
+  InstallShaderDiskCache(*mLib, mDisplay, rawExtString);
 
   // -
 

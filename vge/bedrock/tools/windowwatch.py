@@ -17,6 +17,7 @@ HWND_TOPMOST = W.HWND(-1)
 SWP_NOSIZE = 0x0001
 SWP_NOMOVE = 0x0002
 SWP_NOACTIVATE = 0x0010
+SWP_NOZORDER = 0x0004
 user32.SetWindowPos.argtypes = [W.HWND, W.HWND, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, W.UINT]
 
 
@@ -68,6 +69,10 @@ class WindowWatch:
             hwnd = main_window(self.pid)
             if hwnd:
                 user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
+                rect = W.RECT()
+                user32.GetWindowRect(hwnd, ctypes.byref(rect))
+                user32.SetWindowPos(hwnd, None, rect.left + 1, rect.top, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOZORDER)
+                user32.SetWindowPos(hwnd, None, rect.left, rect.top, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOZORDER)
                 break
             time.sleep(0.1)
         while not self.stop_flag.wait(self.period):
