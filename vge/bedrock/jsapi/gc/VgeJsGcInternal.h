@@ -5,6 +5,7 @@
 
 #include <atomic>
 #include <memory>
+#include <future>
 #include <mutex>
 #include <string>
 #include <unordered_map>
@@ -109,6 +110,8 @@ struct GcState {
   std::vector<JS::GCCellPtr> coloredCells;
   std::vector<JS::GCCellPtr> grayCells;
   std::unordered_map<js::gc::Cell*, std::vector<JS::GCCellPtr>> jsEdges;
+  std::future<std::unordered_map<js::gc::Cell*, std::vector<JS::GCCellPtr>>>
+      pendingCellEdges;
   std::vector<WeakMapEntry> weakMapEntries;
   bool ubiValid = false;
   std::unordered_map<js::gc::Cell*, std::vector<JS::GCCellPtr>> ubiEdges;
@@ -164,6 +167,7 @@ void EnsureHooks(JSContext* aCx);
 
 void RunFullGC(JSContext* aCx, JS::GCOptions aOptions, JS::GCReason aReason);
 void InvalidateGrayBits(GcState& aState);
+void EnsureCellEdges(GcState& aState);
 void InvalidateUbiGraph(GcState& aState);
 void InstallGrayMarkingClient(GcState& aState);
 const v8::HeapSnapshot* TakeReportSnapshot(

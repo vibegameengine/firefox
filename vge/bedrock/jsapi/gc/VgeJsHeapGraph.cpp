@@ -295,26 +295,12 @@ void CollectWeakEntries(GcState& aState, const v8::GrayMarkingResult& aResult,
   }
 }
 
-void CollectCellEdges(GcState& aState, const v8::GrayMarkingResult& aResult,
-                      const std::vector<JS::GCCellPtr>& aCellAt,
-                      std::vector<v8::GrayMarkingEdge>& aEdges) {
-  size_t nodeCount = aCellAt.size();
-  auto indexOf = [&](uintptr_t aAddress) {
-    return aResult.GrayIndexOf(aAddress);
-  };
-  std::vector<uint32_t> offsets(nodeCount + 1, 0);
-  for (const v8::GrayMarkingEdge& edge : aEdges) {
-    offsets[indexOf(edge.from) + 1]++;
-  }
-  for (size_t i = 0; i < nodeCount; i++) {
-    offsets[i + 1] += offsets[i];
-  }
-  std::vector<uint32_t> targets(aEdges.size());
-  std::vector<uint32_t> fill(offsets.begin(), offsets.end() - 1);
-  for (const v8::GrayMarkingEdge& edge : aEdges) {
-    targets[fill[indexOf(edge.from)]++] = indexOf(edge.to);
-  }
-  const std::vector<JS::GCCellPtr>& cellAt = aCellAt;
+std::unordered_map<js::gc::Cell*, std::vector<JS::GCCellPtr>> ExpandCellEdges(
+    const std::vector<JS::GCCellPtr>& cellAt,
+    const std::vector<uint32_t>& offsets,
+    const std::vector<uint32_t>& targets) {
+  std::unordered_map<js::gc::Cell*, std::vector<JS::GCCellPtr>> result;
+  size_t nodeCount = cellAt.size();
   std::vector<uint32_t> stamp(nodeCount, 0);
   std::vector<uint32_t> stack;
   uint32_t generation = 0;
@@ -344,10 +330,48 @@ void CollectCellEdges(GcState& aState, const v8::GrayMarkingResult& aResult,
       }
     }
     if (!edges.empty()) {
-      aState.jsEdges[from.asCell()] = std::move(edges);
+      result[from.asCell()] = std::move(edges);
     }
   }
+  return result;
 }
+
+void CollectCellEdges(GcState& aState, const v8::GrayMarkingResult& aResult,
+                      std::vector<JS::GCCellPtr>&& aCellAt,
+                      std::vector<v8::GrayMarkingEdge>& aEdges) {
+  size_t nodeCount = aCellAt.size();
+  auto indexOf = [&](uintptr_t aAddress) {
+    return aResult.GrayIndexOf(aAddress);
+  };
+  std::vector<uint32_t> offsets(nodeCount + 1, 0);
+  for (const v8::GrayMarkingEdge& edge : aEdges) {
+    offsets[indexOf(edge.from) + 1]++;
+  }
+  for (size_t i = 0; i < nodeCount; i++) {
+    offsets[i + 1] += offsets[i];
+  }
+  std::vector<uint32_t> targets(aEdges.size());
+  std::vector<uint32_t> fill(offsets.begin(), offsets.end() - 1);
+  for (const v8::GrayMarkingEdge& edge : aEdges) {
+    targets[fill[indexOf(edge.from)]++] = indexOf(edge.to);
+  }
+  aState.pendingCellEdges = std::async(
+      std::launch::async,
+      [cellAt = std::move(aCellAt), offsets = std::move(offsets),
+       targets = std::move(targets)]() {
+        return ExpandCellEdges(cellAt, offsets, targets);
+      });
+}
+
+}  // namespace
+
+void EnsureCellEdges(GcState& aState) {
+  if (aState.pendingCellEdges.valid()) {
+    aState.jsEdges = aState.pendingCellEdges.get();
+  }
+}
+
+namespace {
 
 class CellGrayMarkingClient final : public v8::GrayMarkingClient {
  public:
@@ -358,12 +382,16 @@ class CellGrayMarkingClient final : public v8::GrayMarkingClient {
     if (!rt->grayRootTracer) {
       return;
     }
+    mozilla::TimeStamp start = mozilla::TimeStamp::Now();
     GrayRootTracer tracer(rt, aMarker);
     JS::SliceBudget budget = JS::SliceBudget::unlimited();
     rt->grayRootTracer(&tracer, budget, rt->grayRootTracerData);
+    mRootsEnd = mozilla::TimeStamp::Now();
+    mRootsMs = (mRootsEnd - start).ToMilliseconds();
   }
 
   void GrayMarkingFinished(const v8::GrayMarkingResult& aResult) override {
+    mozilla::TimeStamp start = mozilla::TimeStamp::Now();
     size_t ephemeronCount = 0;
     size_t weakRefCount = 0;
     aResult.Ephemerons(&ephemeronCount);
@@ -373,15 +401,33 @@ class CellGrayMarkingClient final : public v8::GrayMarkingClient {
     std::vector<JS::GCCellPtr> cellAt(nodeCount);
     CellsByAddress cells = ColorMarkedCells(
         mState, aResult, ephemeronCount || weakRefCount, cellAt);
+    mozilla::TimeStamp colored = mozilla::TimeStamp::Now();
     size_t edgeCount = 0;
     const v8::GrayMarkingEdge* edges = aResult.Edges(&edgeCount);
     std::vector<v8::GrayMarkingEdge> allEdges(edges, edges + edgeCount);
     CollectWeakEntries(mState, aResult, cells, allEdges);
-    CollectCellEdges(mState, aResult, cellAt, allEdges);
+    mozilla::TimeStamp weak = mozilla::TimeStamp::Now();
+    CollectCellEdges(mState, aResult, std::move(cellAt), allEdges);
     mState.grayBitsValid = true;
+    static const bool sLog = !!getenv("VGE_GC_LOG");
+    if (sLog) {
+      mozilla::TimeStamp end = mozilla::TimeStamp::Now();
+      fprintf(stderr,
+              "VGEGRAY roots %.3f closure %.3f client %.3f color %.3f weak "
+              "%.3f edges %.3f gray %zu edges %zu ephemerons %zu cells %zu\n",
+              mRootsMs, (start - mRootsEnd).ToMilliseconds(),
+              (end - start).ToMilliseconds(),
+              (colored - start).ToMilliseconds(),
+              (weak - colored).ToMilliseconds(), (end - weak).ToMilliseconds(),
+              nodeCount, edgeCount, ephemeronCount,
+              mState.runtime->objectCells.size());
+      fflush(stderr);
+    }
   }
 
  private:
+  double mRootsMs = 0;
+  mozilla::TimeStamp mRootsEnd;
   GcState& mState;
 };
 
@@ -401,6 +447,10 @@ void InvalidateGrayBits(GcState& aState) {
   }
   aState.coloredCells.clear();
   aState.grayCells.clear();
+  if (aState.pendingCellEdges.valid()) {
+    aState.pendingCellEdges.wait();
+    aState.pendingCellEdges = {};
+  }
   aState.jsEdges.clear();
   aState.weakMapEntries.clear();
   aState.weakRefTargets.clear();
