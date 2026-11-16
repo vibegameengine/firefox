@@ -7,6 +7,11 @@
 #include "js/Wrapper.h"
 #include "js/friend/CycleCollector.h"
 
+namespace vge::jsapi {
+extern std::atomic<int64_t> gLiveStringCells;
+extern std::atomic<int64_t> gCreatedStringCells;
+}
+
 namespace vge::jsapi::gc {
 
 namespace {
@@ -430,7 +435,8 @@ class CellGrayMarkingClient final : public v8::GrayMarkingClient {
       fprintf(stderr,
               "VGEGRAY roots %.3f closure %.3f client %.3f color %.3f weak "
               "%.3f edges %.3f gray %zu edges %zu ephemerons %zu cells %zu "
-              "young %zu traced %zu globals_kb %zu\n",
+              "young %zu traced %zu globals_kb %zu strings %lld "
+              "created_strings %lld\n",
               mRootsMs, (start - mRootsEnd).ToMilliseconds(),
               (end - start).ToMilliseconds(),
               (colored - start).ToMilliseconds(),
@@ -438,7 +444,9 @@ class CellGrayMarkingClient final : public v8::GrayMarkingClient {
               nodeCount, edgeCount, ephemeronCount,
               mState.runtime->objectCells.size(),
               mState.runtime->youngTails.size(),
-              mState.runtime->tracedTails.size(), GlobalHandlesKb(mState));
+              mState.runtime->tracedTails.size(), GlobalHandlesKb(mState),
+              static_cast<long long>(gLiveStringCells.load()),
+              static_cast<long long>(gCreatedStringCells.load()));
       fflush(stderr);
     }
   }

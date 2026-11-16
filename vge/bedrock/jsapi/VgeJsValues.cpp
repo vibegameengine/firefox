@@ -8,6 +8,9 @@
 
 namespace vge::jsapi {
 
+std::atomic<int64_t> gLiveStringCells{0};
+std::atomic<int64_t> gCreatedStringCells{0};
+
 namespace {
 
 v8::Local<v8::Private> CellKey(JSContext* aCx) {
@@ -66,6 +69,8 @@ const JSClass* ClassForScriptObject(v8::Local<v8::Object> aObject) {
 StringCell* FillString(JSContext* aCx, v8::Local<v8::String> aString,
                        bool aAtom) {
   StringCell* cell = static_cast<StringCell*>(AllocCell(sizeof(StringCell)));
+  ++gLiveStringCells;
+  ++gCreatedStringCells;
   uint32_t length = aString->Length();
   uintptr_t flags = JS::shadow::String::LINEAR_BIT;
   if (aString->IsOneByte()) {

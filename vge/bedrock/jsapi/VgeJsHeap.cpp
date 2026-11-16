@@ -180,7 +180,10 @@ void DrainDeferredObjectFrees(JSRuntime* aRuntime, size_t aLimit) {
   }
 }
 
+extern std::atomic<int64_t> gLiveStringCells;
+
 void FreeStringChars(StringCell* aCell) {
+  --gLiveStringCells;
   if (!aCell->external) {
     free(const_cast<void*>(aCell->chars));
     return;
