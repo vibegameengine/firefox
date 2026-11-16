@@ -8,6 +8,13 @@
 
 #include "libANGLE/renderer/d3d/d3d11/ResourceManager11.h"
 
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
+#include <map>
+#include <mutex>
+#include <string>
+
 #include "common/debug.h"
 #include "libANGLE/histogram_macros.h"
 #include "libANGLE/renderer/d3d/d3d11/Renderer11.h"
@@ -445,6 +452,92 @@ static_assert(kResourceTypeErrors[NumResourceTypes - 1] != nullptr,
 
 }  // anonymous namespace
 
+
+namespace
+{
+std::string VgeCategoryOf(const D3D11_TEXTURE2D_DESC &desc)
+{
+    std::string name = "tex2d";
+    name += desc.Usage == D3D11_USAGE_STAGING   ? "/staging"
+            : desc.Usage == D3D11_USAGE_DYNAMIC ? "/dynamic"
+                                                : "/default";
+    if (desc.BindFlags & D3D11_BIND_RENDER_TARGET)
+        name += "/rt";
+    if (desc.BindFlags & D3D11_BIND_DEPTH_STENCIL)
+        name += "/ds";
+    if (desc.BindFlags & D3D11_BIND_SHADER_RESOURCE)
+        name += "/srv";
+    if (desc.MiscFlags & (D3D11_RESOURCE_MISC_SHARED | D3D11_RESOURCE_MISC_SHARED_NTHANDLE))
+        name += "/shared";
+    if (desc.SampleDesc.Count > 1)
+        name += "/msaa";
+    return name;
+}
+
+std::string VgeCategoryOf(const D3D11_BUFFER_DESC &desc)
+{
+    std::string name = "buffer";
+    name += desc.Usage == D3D11_USAGE_STAGING   ? "/staging"
+            : desc.Usage == D3D11_USAGE_DYNAMIC ? "/dynamic"
+                                                : "/default";
+    return name;
+}
+
+struct VgeAngleMemory
+{
+    std::mutex lock;
+    std::map<std::pair<const void *, std::string>, std::pair<int64_t, int64_t>> totals;
+    std::chrono::steady_clock::time_point lastPrint = std::chrono::steady_clock::now();
+};
+
+VgeAngleMemory &VgeMemory()
+{
+    static VgeAngleMemory memory;
+    return memory;
+}
+
+bool VgeMemoryLogEnabled()
+{
+    static const bool enabled = getenv("VGE_ANGLE_MEM") != nullptr;
+    return enabled;
+}
+
+void VgeNote(const void *device, const std::string &category, int64_t count, int64_t bytes)
+{
+    VgeAngleMemory &memory = VgeMemory();
+    std::lock_guard<std::mutex> guard(memory.lock);
+    auto &slot = memory.totals[{device, category}];
+    slot.first += count;
+    slot.second += bytes;
+    auto now = std::chrono::steady_clock::now();
+    if (now - memory.lastPrint < std::chrono::seconds(2))
+        return;
+    memory.lastPrint = now;
+    for (const auto &[key, value] : memory.totals)
+    {
+        if (value.second > (1 << 20))
+            fprintf(stderr, "VGEANGLE device=%p %s count=%lld mb=%lld\n", key.first,
+                    key.second.c_str(), static_cast<long long>(value.first),
+                    static_cast<long long>(value.second >> 20));
+    }
+    fflush(stderr);
+}
+
+template <typename T>
+void VgeNoteAllocation(const void *, const T *, int64_t)
+{}
+
+void VgeNoteAllocation(const void *device, const D3D11_TEXTURE2D_DESC *desc, int64_t sign)
+{
+    VgeNote(device, VgeCategoryOf(*desc), sign, sign * int64_t(ComputeMemoryUsage(desc)));
+}
+
+void VgeNoteAllocation(const void *device, const D3D11_BUFFER_DESC *desc, int64_t sign)
+{
+    VgeNote(device, VgeCategoryOf(*desc), sign, sign * int64_t(ComputeMemoryUsage(desc)));
+}
+}  // namespace
+
 // ResourceManager11 Implementation.
 ResourceManager11::ResourceManager11() : mInitializeAllocations(false)
 {
@@ -497,6 +590,10 @@ angle::Result ResourceManager11::allocate(d3d::Context *context,
 
     ASSERT(resource);
     incrResource(GetResourceTypeFromD3D11<T>(), ComputeMemoryUsage(desc));
+    if (VgeMemoryLogEnabled())
+    {
+        VgeNoteAllocation(device, desc, 1);
+    }
     *resourceOut = std::move(Resource11<T>(std::move(resource), this));
     return angle::Result::Continue;
 }
@@ -526,6 +623,25 @@ void ResourceManager11::decrResource(ResourceType resourceType, uint64_t memoryS
 void ResourceManager11::onReleaseGeneric(ResourceType resourceType, ID3D11DeviceChild *resource)
 {
     ASSERT(resource);
+    if (VgeMemoryLogEnabled())
+    {
+        ID3D11Device *device = nullptr;
+        resource->GetDevice(&device);
+        if (resourceType == ResourceType::Texture2D)
+        {
+            D3D11_TEXTURE2D_DESC desc;
+            static_cast<ID3D11Texture2D *>(resource)->GetDesc(&desc);
+            VgeNoteAllocation(device, &desc, -1);
+        }
+        else if (resourceType == ResourceType::Buffer)
+        {
+            D3D11_BUFFER_DESC desc;
+            static_cast<ID3D11Buffer *>(resource)->GetDesc(&desc);
+            VgeNoteAllocation(device, &desc, -1);
+        }
+        if (device)
+            device->Release();
+    }
     decrResource(resourceType, ComputeGenericMemoryUsage(resourceType, resource));
 }
 

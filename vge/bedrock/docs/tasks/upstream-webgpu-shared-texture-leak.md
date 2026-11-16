@@ -49,3 +49,10 @@ Mozilla does not take GitHub pull requests for Gecko. The route is:
 3. Submit with `moz-phab` to Phabricator, reviewers from the WebGPU module.
 
 Ask the user before filing or submitting anything: it publishes under their account.
+
+## Related: stock Firefox on the WebGL game
+
+Stock Firefox 160 on https://claybound-56949.web.app/ (WebGL 2), same machine, window visible:
+dedicated video memory 2.2 → 4.0 → 5.8 → 7.7 → 9.5 → 12.2 GB over 30 s. Our build on the same
+page holds 554 MB flat. The cause in Firefox is not yet identified; check it before filing,
+it may be the same shared texture reopen pattern on the WebGL or compositor path.
