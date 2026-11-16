@@ -284,7 +284,7 @@ void RunFullGC(JSContext* aCx, JS::GCOptions aOptions, JS::GCReason aReason) {
   state.currentReason = aReason;
   state.currentOptions = aOptions;
   v8::Isolate* isolate = aCx->isolate;
-  if (aOptions != JS::GCOptions::Normal) {
+  if (aOptions == JS::GCOptions::Shutdown) {
     isolate->LowMemoryNotification();
   } else {
     isolate->MemoryPressureNotification(v8::MemoryPressureLevel::kCritical);

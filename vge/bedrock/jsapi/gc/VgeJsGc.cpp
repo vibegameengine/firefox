@@ -468,14 +468,13 @@ JS_PUBLIC_API bool JS::IncrementalGCHasForegroundWork(JSContext* cx) {
 }
 
 JS_PUBLIC_API void JS::FinishIncrementalGC(JSContext* cx, JS::GCReason reason) {
-  GcState& state = StateOf(cx->runtime);
-  RunFullGC(cx, state.currentOptions, reason);
+  RunFullGC(cx, JS::GCOptions::Normal, reason);
 }
 
 JS_PUBLIC_API void JS::AbortIncrementalGC(JSContext* cx) {
   GcState& state = StateOf(cx->runtime);
   if (state.v8Marking) {
-    RunFullGC(cx, state.currentOptions, JS::GCReason::ABORT_GC);
+    RunFullGC(cx, JS::GCOptions::Normal, JS::GCReason::ABORT_GC);
   }
 }
 
