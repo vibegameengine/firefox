@@ -382,6 +382,12 @@ void EnsureCellEdges(GcState& aState) {
 
 namespace {
 
+size_t GlobalHandlesKb(GcState& aState) {
+  v8::HeapStatistics stats;
+  aState.runtime->isolate->GetHeapStatistics(&stats);
+  return stats.used_global_handles_size() / 1024;
+}
+
 class CellGrayMarkingClient final : public v8::GrayMarkingClient {
  public:
   explicit CellGrayMarkingClient(GcState& aState) : mState(aState) {}
@@ -423,13 +429,16 @@ class CellGrayMarkingClient final : public v8::GrayMarkingClient {
       mozilla::TimeStamp end = mozilla::TimeStamp::Now();
       fprintf(stderr,
               "VGEGRAY roots %.3f closure %.3f client %.3f color %.3f weak "
-              "%.3f edges %.3f gray %zu edges %zu ephemerons %zu cells %zu\n",
+              "%.3f edges %.3f gray %zu edges %zu ephemerons %zu cells %zu "
+              "young %zu traced %zu globals_kb %zu\n",
               mRootsMs, (start - mRootsEnd).ToMilliseconds(),
               (end - start).ToMilliseconds(),
               (colored - start).ToMilliseconds(),
               (weak - colored).ToMilliseconds(), (end - weak).ToMilliseconds(),
               nodeCount, edgeCount, ephemeronCount,
-              mState.runtime->objectCells.size());
+              mState.runtime->objectCells.size(),
+              mState.runtime->youngTails.size(),
+              mState.runtime->tracedTails.size(), GlobalHandlesKb(mState));
       fflush(stderr);
     }
   }
