@@ -114,6 +114,7 @@ def main():
     parser.add_argument("--alloc", action="store_true")
     parser.add_argument("--compare")
     parser.add_argument("--watch", action="store_true")
+    parser.add_argument("--video-series", action="store_true")
     args = parser.parse_args()
 
     RESULTS.mkdir(parents=True, exist_ok=True)
@@ -161,7 +162,12 @@ def main():
 
                 watch = WindowWatch(process.pid, shots=str(RESULTS / args.label))
                 watch.start()
-            time.sleep(args.seconds)
+            video_series = []
+            deadline = time.time() + args.seconds
+            while time.time() < deadline:
+                time.sleep(min(5, max(0, deadline - time.time())))
+                if args.video_series and process.poll() is None:
+                    video_series.append(gpu_memory(process.pid))
             if args.trace:
                 deadline = time.time() + 180
                 while time.time() < deadline and process.poll() is None and not trace_path.exists():
@@ -206,6 +212,7 @@ def main():
         "gc": parse_gc(text),
         "gray_worst_ms": parse_gray(text),
         "screen": screen,
+        "video_series_mb": video_series,
     }
     (RESULTS / f"{args.label}.json").write_text(json.dumps(result, indent=1))
     print(json.dumps(result))

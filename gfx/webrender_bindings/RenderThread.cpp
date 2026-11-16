@@ -4,6 +4,8 @@
 
 #include "RenderThread.h"
 
+#include "prenv.h"
+
 #include "GLContext.h"
 #include "GeckoProfiler.h"
 #include "GfxInfoBase.h"
@@ -1103,6 +1105,15 @@ void RenderThread::RegisterExternalImage(
   }
   auto [it, inserted] = mRenderTextures.emplace(aExternalImageId, texture);
   MOZ_RELEASE_ASSERT(inserted, "ExternalImageId collision");
+  static const bool sRtLog = !!PR_GetEnv("VGE_RT_LOG");
+  if (sRtLog) {
+    static uint32_t sRegistered = 0;
+    if (++sRegistered % 100 == 0) {
+      printf_stderr("VGERT render-textures registered=%u live=%zu deferred=%zu\n",
+                    sRegistered, mRenderTextures.size(),
+                    mRenderTexturesDeferred.size());
+    }
+  }
 
 #ifdef DEBUG
   int32_t maxAllowedIncrease =

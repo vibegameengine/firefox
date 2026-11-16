@@ -397,6 +397,25 @@ pub extern "C" fn wgpu_server_poll_all_devices(global: &Global, force_wait: bool
 }
 
 #[no_mangle]
+pub extern "C" fn wgpu_server_device_log_counters(global: &Global, device_id: id::DeviceId) {
+    let device = global.resolve_device_id(device_id);
+    let counters = device.get_internal_counters();
+    let hal = &counters.hal;
+    eprintln!(
+        "VGEWGPU device={:?} textures={} views={} buffers={} bind_groups={} encoders={} texture_mb={} buffer_mb={} allocations={}",
+        device_id,
+        hal.textures.read(),
+        hal.texture_views.read(),
+        hal.buffers.read(),
+        hal.bind_groups.read(),
+        hal.command_encoders.read(),
+        hal.texture_memory.read() / (1024 * 1024),
+        hal.buffer_memory.read() / (1024 * 1024),
+        hal.memory_allocations.read(),
+    );
+}
+
+#[no_mangle]
 pub extern "C" fn wgpu_server_device_poll(
     global: &Global,
     device_id: id::DeviceId,

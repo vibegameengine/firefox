@@ -7,10 +7,6 @@ namespace vge::jsapi::gc {
 namespace {
 
 std::mutex sStatesLock;
-std::unordered_map<JSRuntime*, GcState*>& States() {
-  static std::unordered_map<JSRuntime*, GcState*> states;
-  return states;
-}
 
 struct ZoneBits : public JS::shadow::Zone {
   static void SetMarking(JS::Zone* aZone, bool aOn) {
@@ -235,18 +231,20 @@ void Epilogue(v8::Isolate* aIsolate, v8::GCType aType,
 }
 
 GcState* MaybeStateOf(JSRuntime* aRuntime) {
-  std::lock_guard<std::mutex> lock(sStatesLock);
-  auto it = States().find(aRuntime);
-  return it == States().end() ? nullptr : it->second;
+  return aRuntime->gcState.load(std::memory_order_acquire);
 }
 
 GcState& StateOf(JSRuntime* aRuntime) {
-  std::lock_guard<std::mutex> lock(sStatesLock);
-  GcState*& slot = States()[aRuntime];
-  if (!slot) {
-    slot = new GcState(aRuntime);
+  if (GcState* state = aRuntime->gcState.load(std::memory_order_acquire)) {
+    return *state;
   }
-  return *slot;
+  std::lock_guard<std::mutex> lock(sStatesLock);
+  GcState* state = aRuntime->gcState.load(std::memory_order_relaxed);
+  if (!state) {
+    state = new GcState(aRuntime);
+    aRuntime->gcState.store(state, std::memory_order_release);
+  }
+  return *state;
 }
 
 void EnsureHooks(JSContext* aCx) {
@@ -288,11 +286,14 @@ void RunFullGC(JSContext* aCx, JS::GCOptions aOptions, JS::GCReason aReason) {
     isolate->LowMemoryNotification();
   } else {
     isolate->MemoryPressureNotification(v8::MemoryPressureLevel::kCritical);
-    isolate->MemoryPressureNotification(
-        state.lowMemory ? v8::MemoryPressureLevel::kModerate
-                        : v8::MemoryPressureLevel::kNone);
   }
   state.drivingGc = wasDriving;
+  if (sLog) {
+    fprintf(stderr, "VGEGC done majors=%llu grayValid=%d marking=%d\n",
+            static_cast<unsigned long long>(state.majorNumber),
+            state.grayBitsValid, state.v8Marking);
+    fflush(stderr);
+  }
 }
 
 void MarkingBarrier(JS::GCCellPtr aThing) {

@@ -4,6 +4,10 @@
 
 #include "WebGPUParent.h"
 
+#include <set>
+
+#include "prenv.h"
+
 #include <memory>
 #include <unordered_set>
 
@@ -454,6 +458,17 @@ WebGPUParent::~WebGPUParent() = default;
 
 void WebGPUParent::MaintainDevices() {
   ffi::wgpu_server_poll_all_devices(mContext.get(), false);
+  static const bool sLog = !!PR_GetEnv("VGE_WGPU_LOG");
+  static uint32_t sTicks = 0;
+  if (sLog && ++sTicks % 20 == 0) {
+    std::set<RawId> devices;
+    for (const auto& entry : mPresentationDataMap) {
+      devices.insert(entry.second->mDeviceId);
+    }
+    for (RawId device : devices) {
+      ffi::wgpu_server_device_log_counters(mContext.get(), device);
+    }
+  }
 }
 
 void WebGPUParent::PostAdapterRequestDevice(RawId aDeviceId) {

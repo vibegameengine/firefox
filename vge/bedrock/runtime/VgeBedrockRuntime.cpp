@@ -56,6 +56,7 @@
 #include "prenv.h"
 #include "nsGlobalWindowOuter.h"
 #include "nsIBrowserDOMWindow.h"
+#include "nsCharSeparatedTokenizer.h"
 #include "nsIFocusManager.h"
 #include "nsQueryObject.h"
 #include "nsIWindowCreator.h"
@@ -782,6 +783,28 @@ int VgeBedrock_RunLayoutTest(int aArgc, char** aArgv) {
     Preferences::SetInt("browser.link.open_newwindow",
                         nsIBrowserDOMWindow::OPEN_CURRENTWINDOW);
     Preferences::SetInt("browser.link.open_newwindow.restriction", 0);
+    if (const char* prefs = PR_GetEnv("VGE_PREFS")) {
+      for (const nsACString& entry : nsCCharSeparatedTokenizer(
+                                         nsDependentCString(prefs), ';')
+                                         .ToRange()) {
+        int32_t eq = entry.FindChar('=');
+        if (eq <= 0) {
+          continue;
+        }
+        nsAutoCString name(Substring(entry, 0, eq));
+        nsAutoCString value(Substring(entry, eq + 1));
+        nsresult rv = NS_OK;
+        int32_t number = value.ToInteger(&rv);
+        if (value.EqualsLiteral("true") || value.EqualsLiteral("false")) {
+          Preferences::SetBool(name.get(), value.EqualsLiteral("true"));
+        } else if (NS_SUCCEEDED(rv)) {
+          Preferences::SetInt(name.get(), number);
+        } else {
+          Preferences::SetCString(name.get(), value);
+        }
+        printf("pref %s=%s\n", name.get(), value.get());
+      }
+    }
     gfxPlatform::GetPlatform();
     gfx::GPUProcessManager::Get()->EnsureProtocolsReady();
     result = aArgc > 2 && !strcmp(aArgv[1], "--window")

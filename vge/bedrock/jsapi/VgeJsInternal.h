@@ -1,6 +1,7 @@
 #ifndef vge_bedrock_jsapi_VgeJsInternal_h
 #define vge_bedrock_jsapi_VgeJsInternal_h
 
+#include <atomic>
 #include <stdint.h>
 
 #include <string>
@@ -199,8 +200,14 @@ constexpr v8::CppHeapPointerTag kAnchorTag =
 
 }
 
+namespace vge::jsapi::gc {
+struct GcState;
+}
+
 struct JSRuntime {
   JSRuntime();
+
+  std::atomic<vge::jsapi::gc::GcState*> gcState{nullptr};
 
   v8::Isolate* isolate = nullptr;
   v8::CppHeap* cppHeap = nullptr;

@@ -4,6 +4,10 @@
 
 #include "mozilla/layers/RemoteTextureMap.h"
 
+#include <cinttypes>
+
+#include "prenv.h"
+
 #include <algorithm>
 #include <vector>
 
@@ -484,6 +488,16 @@ void RemoteTextureMap::PushTexture(
       RecycleTexture(owner->mRecycleBin,
                      *owner->mReleasingTextureDataHolders.front(), true);
       owner->mReleasingTextureDataHolders.pop_front();
+    }
+    static const bool sRtLog = !!PR_GetEnv("VGE_RT_LOG");
+    if (sRtLog) {
+      printf_stderr(
+          "VGERT push id=%" PRIu64 " waiting=%zu using=%zu recycled=%zu "
+          "latestUsing=%" PRIu64 "\n",
+          uint64_t(aTextureId), owner->mWaitingTextureDataHolders.size(),
+          owner->mUsingTextureDataHolders.size(),
+          owner->mRecycleBin->mRecycledTextures.size(),
+          uint64_t(owner->mLatestUsingTextureId));
     }
   }
 
