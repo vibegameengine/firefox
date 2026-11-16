@@ -1,0 +1,110 @@
+diff --git a/gfx/layers/d3d11/FenceD3D11.cpp b/gfx/layers/d3d11/FenceD3D11.cpp
+index 74c4c158aa..b728049639 100644
+--- a/gfx/layers/d3d11/FenceD3D11.cpp
++++ b/gfx/layers/d3d11/FenceD3D11.cpp
+@@ -124,11 +124,14 @@ bool FenceD3D11::IsSupportedByDevice(ID3D11Device* aDevice) {
+ FenceD3D11::FenceD3D11(const OwnsFence aOwnsFence,
+                        const RefPtr<ID3D11Device> aDevice,
+                        const RefPtr<ID3D11Fence> aSignalFence,
+-                       const RefPtr<gfx::FileHandleWrapper>& aHandle)
++                       const RefPtr<gfx::FileHandleWrapper>& aHandle,
++                       RefPtr<D3D11WaitFenceCache> aWaitFences)
+     : mOwnsFence(aOwnsFence),
+       mDevice(aDevice),
+       mSignalFence(aSignalFence),
+-      mHandle(aHandle) {
++      mHandle(aHandle),
++      mWaitFences(aWaitFences ? std::move(aWaitFences)
++                              : MakeRefPtr<D3D11WaitFenceCache>()) {
+   MOZ_ASSERT(mHandle);
+   MOZ_ASSERT_IF(mOwnsFence == OwnsFence::Yes, mDevice);
+   MOZ_ASSERT_IF(mOwnsFence == OwnsFence::Yes, mSignalFence);
+@@ -136,10 +139,10 @@ FenceD3D11::FenceD3D11(const OwnsFence aOwnsFence,
+ }
+ 
+ RefPtr<FenceD3D11> FenceD3D11::CloneFromHandle() {
+-  RefPtr<FenceD3D11> fence = FenceD3D11::CreateFromHandle(mHandle, mDevice);
+-  if (fence) {
+-    fence->Update(mFenceValue);
+-  }
++  RefPtr<FenceD3D11> fence = new FenceD3D11(OwnsFence::No, mDevice,
++                                            /* aSignalFence */ nullptr,
++                                            mHandle, mWaitFences);
++  fence->Update(mFenceValue);
+   return fence;
+ }
+ 
+@@ -199,9 +202,9 @@ bool FenceD3D11::Wait(ID3D11Device* aDevice) {
+ 
+   RefPtr<ID3D11Fence> fence;
+   {
+-    MutexAutoLock lock(mMutex);
+-    auto it = mWaitFenceMap.find(aDevice);
+-    if (it == mWaitFenceMap.end()) {
++    MutexAutoLock lock(mWaitFences->mMutex);
++    auto it = mWaitFences->mFences.find(aDevice);
++    if (it == mWaitFences->mFences.end()) {
+       RefPtr<ID3D11Device5> d3d11_5;
+       auto hr = aDevice->QueryInterface(__uuidof(ID3D11Device5),
+                                         getter_AddRefs(d3d11_5));
+@@ -217,7 +220,7 @@ bool FenceD3D11::Wait(ID3D11Device* aDevice) {
+                             << gfx::hexa(hr);
+         return false;
+       }
+-      mWaitFenceMap.emplace(aDevice, fence);
++      mWaitFences->mFences.emplace(aDevice, fence);
+     } else {
+       fence = it->second;
+     }
+diff --git a/gfx/layers/d3d11/FenceD3D11.h b/gfx/layers/d3d11/FenceD3D11.h
+index 8841d2d9ca..b107564c64 100644
+--- a/gfx/layers/d3d11/FenceD3D11.h
++++ b/gfx/layers/d3d11/FenceD3D11.h
+@@ -10,6 +10,7 @@
+ #include "mozilla/Mutex.h"
+ #include "mozilla/gfx/FileHandleWrapper.h"
+ #include "mozilla/layers/Fence.h"
++#include "nsISupportsImpl.h"
+ 
+ struct ID3D11Device;
+ struct ID3D11Fence;
+@@ -17,6 +18,18 @@ struct ID3D11Fence;
+ namespace mozilla {
+ namespace layers {
+ 
++class D3D11WaitFenceCache final {
++ public:
++  NS_INLINE_DECL_THREADSAFE_REFCOUNTING(D3D11WaitFenceCache)
++
++  Mutex mMutex{"D3D11WaitFenceCache::mMutex"};
++  std::unordered_map<const ID3D11Device*, RefPtr<ID3D11Fence>> mFences
++      MOZ_GUARDED_BY(mMutex);
++
++ private:
++  ~D3D11WaitFenceCache() = default;
++};
++
+ //
+ // A class for wrapping ID3D11Fence.
+ //
+@@ -79,17 +92,13 @@ class FenceD3D11 final : public Fence {
+  protected:
+   FenceD3D11(const OwnsFence aOwnsFence, const RefPtr<ID3D11Device> aDevice,
+              const RefPtr<ID3D11Fence> aSignalFence,
+-             const RefPtr<gfx::FileHandleWrapper>& aHandle);
++             const RefPtr<gfx::FileHandleWrapper>& aHandle,
++             RefPtr<D3D11WaitFenceCache> aWaitFences = nullptr);
+   virtual ~FenceD3D11() = default;
+ 
+   uint64_t mFenceValue = 0;
+ 
+-  Mutex mMutex{"FenceD3D11::mMutex"};
+-  // Fences that are used for waiting.
+-  // They are opened for each D3D11 device that the fence is waited on.
+-  // XXX change to LRU cache
+-  std::unordered_map<const ID3D11Device*, RefPtr<ID3D11Fence>> mWaitFenceMap
+-      MOZ_GUARDED_BY(mMutex);
++  const RefPtr<D3D11WaitFenceCache> mWaitFences;
+ };
+ 
+ }  // namespace layers
