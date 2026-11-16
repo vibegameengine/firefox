@@ -104,7 +104,7 @@ try {
       categories: ["v8", "disabled-by-default-v8.gc", "devtools.timeline", "blink.user_timing"],
     });
   }
-  await page.goto("https://claybound-56949.web.app/");
+  await page.goto(process.env.BENCH_URL ?? "https://claybound-56949.web.app/");
   await page.evaluate(probe);
   const pid = powershell(
     `(Get-Process chrome | Where-Object { $_.Path -like '*${chromeDir}*' -and $_.MainWindowHandle -ne 0 } | Select-Object -First 1).Id`,
