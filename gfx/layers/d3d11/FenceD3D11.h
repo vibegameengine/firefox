@@ -10,12 +10,30 @@
 #include "mozilla/Mutex.h"
 #include "mozilla/gfx/FileHandleWrapper.h"
 #include "mozilla/layers/Fence.h"
+#include "nsISupportsImpl.h"
 
 struct ID3D11Device;
 struct ID3D11Fence;
+struct ID3D12Device;
+struct ID3D12Fence;
+struct ID3D12CommandQueue;
 
 namespace mozilla {
 namespace layers {
+
+class D3D11WaitFenceCache final {
+ public:
+  NS_INLINE_DECL_THREADSAFE_REFCOUNTING(D3D11WaitFenceCache)
+
+  Mutex mMutex{"D3D11WaitFenceCache::mMutex"};
+  std::unordered_map<const ID3D11Device*, RefPtr<ID3D11Fence>> mFences
+      MOZ_GUARDED_BY(mMutex);
+  std::unordered_map<const ID3D12Device*, RefPtr<ID3D12Fence>> mD3D12Fences
+      MOZ_GUARDED_BY(mMutex);
+
+ private:
+  ~D3D11WaitFenceCache();
+};
 
 //
 // A class for wrapping ID3D11Fence.
@@ -64,6 +82,8 @@ class FenceD3D11 final : public Fence {
   // Wait for fence until it reaches or exceeds mFenceValue.
   bool Wait(ID3D11Device* aDevice);
 
+  bool WaitOnD3D12Queue(ID3D12Device* aDevice, ID3D12CommandQueue* aQueue);
+
   uint64_t GetFenceValue() const { return mFenceValue; }
 
   enum class OwnsFence : bool { No, Yes };
@@ -79,17 +99,13 @@ class FenceD3D11 final : public Fence {
  protected:
   FenceD3D11(const OwnsFence aOwnsFence, const RefPtr<ID3D11Device> aDevice,
              const RefPtr<ID3D11Fence> aSignalFence,
-             const RefPtr<gfx::FileHandleWrapper>& aHandle);
+             const RefPtr<gfx::FileHandleWrapper>& aHandle,
+             RefPtr<D3D11WaitFenceCache> aWaitFences = nullptr);
   virtual ~FenceD3D11() = default;
 
   uint64_t mFenceValue = 0;
 
-  Mutex mMutex{"FenceD3D11::mMutex"};
-  // Fences that are used for waiting.
-  // They are opened for each D3D11 device that the fence is waited on.
-  // XXX change to LRU cache
-  std::unordered_map<const ID3D11Device*, RefPtr<ID3D11Fence>> mWaitFenceMap
-      MOZ_GUARDED_BY(mMutex);
+  const RefPtr<D3D11WaitFenceCache> mWaitFences;
 };
 
 }  // namespace layers

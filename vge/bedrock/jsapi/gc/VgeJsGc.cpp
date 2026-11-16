@@ -454,8 +454,13 @@ JS_PUBLIC_API void JS::StartIncrementalGC(JSContext* cx, JS::GCOptions options,
     case JS::GCReason::PAGE_HIDE:
     case JS::GCReason::USER_INACTIVE:
       return;
-    default:
-      RunFullGC(cx, options, reason);
+    default: {
+      GcState& state = StateOf(cx->runtime);
+      state.currentReason = reason;
+      state.currentOptions = options;
+      cx->isolate->MemoryPressureNotification(
+          v8::MemoryPressureLevel::kModerate);
+    }
   }
 }
 

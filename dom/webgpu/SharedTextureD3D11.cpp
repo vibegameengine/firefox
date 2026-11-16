@@ -139,9 +139,15 @@ SharedTextureD3D11::~SharedTextureD3D11() {
   }
 }
 
-ID3D12Resource* SharedTextureD3D11::GetD3D12Resource(ID3D12Device* aDevice) {
-  if (!GetSharedTextureHandle()) {
-    return nullptr;
+ID3D12Resource* SharedTextureD3D11::GetD3D12Resource(
+    ID3D12Device* aDevice, ID3D12CommandQueue* aQueue) {
+  auto* fencesHolderMap = layers::CompositeProcessFencesHolderMap::Get();
+  MOZ_ASSERT(fencesHolderMap);
+  auto fences = fencesHolderMap->TakeAllFencesAndForget(mFencesHolderId);
+  for (const auto& fence : fences) {
+    if (auto* fenceD3D11 = fence ? fence->AsFenceD3D11() : nullptr) {
+      fenceD3D11->WaitOnD3D12Queue(aDevice, aQueue);
+    }
   }
   if (!mD3D12Resource || mD3D12Device != aDevice) {
     RefPtr<ID3D12Resource> resource;

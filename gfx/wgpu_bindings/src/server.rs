@@ -1725,6 +1725,7 @@ extern "C" {
         parent: WebGPUParentPtr,
         id: id::TextureId,
         device: *mut core::ffi::c_void,
+        queue: *mut core::ffi::c_void,
     ) -> *mut core::ffi::c_void;
     #[cfg(target_os = "linux")]
     fn wgpu_server_get_dma_buf_info(parent: WebGPUParentPtr, id: id::TextureId) -> DMABufInfo;
@@ -1916,10 +1917,11 @@ impl Global {
         swap_chain_id: Option<SwapChainId>,
     ) -> bool {
         let device = self.resolve_device_id(device_id);
-        let dx12_device = unsafe { device.as_hal::<wgc::api::Dx12>() }
-            .expect("D3D12 backend device on windows")
-            .raw_device()
-            .clone();
+        let dx12_hal = unsafe { device.as_hal::<wgc::api::Dx12>() }
+            .expect("D3D12 backend device on windows");
+        let dx12_device = dx12_hal.raw_device().clone();
+        let dx12_queue = dx12_hal.raw_queue().clone();
+        drop(dx12_hal);
 
         let ret = unsafe {
             wgpu_server_ensure_shared_texture_for_swap_chain(
@@ -1946,6 +1948,7 @@ impl Global {
                 self.owner,
                 texture_id,
                 windows::core::Interface::as_raw(&dx12_device),
+                windows::core::Interface::as_raw(&dx12_queue),
             )
         };
         if raw_resource.is_null() {

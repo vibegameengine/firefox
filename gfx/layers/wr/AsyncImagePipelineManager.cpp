@@ -4,6 +4,10 @@
 
 #include "AsyncImagePipelineManager.h"
 
+#include <cinttypes>
+
+#include "prenv.h"
+
 #include <algorithm>
 #include <iterator>
 
@@ -233,6 +237,12 @@ Maybe<TextureHost::ResourceUpdateOp> AsyncImagePipelineManager::UpdateImageKeys(
   auto* wrapper = aTexture ? aTexture->AsRemoteTextureHostWrapper() : nullptr;
   if (wrapper && !aPipeline->mImageHost->GetAsyncRef()) {
     RemoteTextureMap::Get()->GetRemoteTexture(wrapper);
+    static const bool sRtLog = !!PR_GetEnv("VGE_RT_LOG");
+    if (sRtLog) {
+      printf_stderr("VGERT bind id=%" PRIu64 " ready=%d subtextures=%u\n",
+                    uint64_t(wrapper->GetRemoteTextureInfo().mTextureId),
+                    wrapper->IsReadyForRendering(), wrapper->NumSubTextures());
+    }
   }
 
   if (!aTexture || aTexture->NumSubTextures() == 0) {
@@ -567,6 +577,15 @@ void AsyncImagePipelineManager::ApplyAsyncImageForPipeline(
   if (aPendingRemoteTextures && texture &&
       texture != pipeline->mCurrentTexture && wrapper) {
     aPendingRemoteTextures->mList.emplace(wrapper->GetRemoteTextureInfo());
+  }
+  static const bool sRtLog = !!PR_GetEnv("VGE_RT_LOG");
+  if (sRtLog) {
+    printf_stderr(
+        "VGERT apply pending=%d ops=%d texture=%d wrapper=%d same=%d id=%" PRIu64
+        "\n",
+        !!aPendingRemoteTextures, !!aPendingOps, !!texture, !!wrapper,
+        texture == pipeline->mCurrentTexture,
+        wrapper ? uint64_t(wrapper->GetRemoteTextureInfo().mTextureId) : 0);
   }
 
   if (aPendingOps && !pipeline->mImageHost->GetAsyncRef()) {

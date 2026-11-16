@@ -87,7 +87,8 @@ extern void wgpu_server_ensure_shared_texture_for_readback(
 
 #ifdef XP_WIN
 extern void* wgpu_server_get_shared_texture_d3d12_resource(
-    WGPUWebGPUParentPtr aParent, WGPUTextureId aId, void* aD3D12Device) {
+    WGPUWebGPUParentPtr aParent, WGPUTextureId aId, void* aD3D12Device,
+    void* aD3D12Queue) {
   auto* parent = static_cast<WebGPUParent*>(aParent);
   auto texture = parent->GetSharedTexture(aId);
   if (!texture) {
@@ -100,7 +101,8 @@ extern void* wgpu_server_get_shared_texture_d3d12_resource(
     return nullptr;
   }
   return textureD3D11->GetD3D12Resource(
-      static_cast<ID3D12Device*>(aD3D12Device));
+      static_cast<ID3D12Device*>(aD3D12Device),
+      static_cast<ID3D12CommandQueue*>(aD3D12Queue));
 }
 
 extern void* wgpu_server_get_shared_texture_handle(WGPUWebGPUParentPtr aParent,

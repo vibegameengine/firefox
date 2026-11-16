@@ -4,6 +4,8 @@
 
 #include "FenceD3D11.h"
 
+#include <d3d12.h>
+
 #include <d3d11.h>
 #include <d3d11_3.h>
 #include <d3d11_4.h>
@@ -16,6 +18,8 @@ namespace mozilla {
 namespace layers {
 
 constinit RefPtr<ID3D11Device> mDevice;
+
+D3D11WaitFenceCache::~D3D11WaitFenceCache() = default;
 
 /* static */
 RefPtr<FenceD3D11> FenceD3D11::Create(ID3D11Device* aDevice) {
@@ -124,11 +128,14 @@ bool FenceD3D11::IsSupportedByDevice(ID3D11Device* aDevice) {
 FenceD3D11::FenceD3D11(const OwnsFence aOwnsFence,
                        const RefPtr<ID3D11Device> aDevice,
                        const RefPtr<ID3D11Fence> aSignalFence,
-                       const RefPtr<gfx::FileHandleWrapper>& aHandle)
+                       const RefPtr<gfx::FileHandleWrapper>& aHandle,
+                       RefPtr<D3D11WaitFenceCache> aWaitFences)
     : mOwnsFence(aOwnsFence),
       mDevice(aDevice),
       mSignalFence(aSignalFence),
-      mHandle(aHandle) {
+      mHandle(aHandle),
+      mWaitFences(aWaitFences ? std::move(aWaitFences)
+                              : MakeRefPtr<D3D11WaitFenceCache>()) {
   MOZ_ASSERT(mHandle);
   MOZ_ASSERT_IF(mOwnsFence == OwnsFence::Yes, mDevice);
   MOZ_ASSERT_IF(mOwnsFence == OwnsFence::Yes, mSignalFence);
@@ -136,10 +143,10 @@ FenceD3D11::FenceD3D11(const OwnsFence aOwnsFence,
 }
 
 RefPtr<FenceD3D11> FenceD3D11::CloneFromHandle() {
-  RefPtr<FenceD3D11> fence = FenceD3D11::CreateFromHandle(mHandle, mDevice);
-  if (fence) {
-    fence->Update(mFenceValue);
-  }
+  RefPtr<FenceD3D11> fence = new FenceD3D11(OwnsFence::No, mDevice,
+                                            /* aSignalFence */ nullptr,
+                                            mHandle, mWaitFences);
+  fence->Update(mFenceValue);
   return fence;
 }
 
@@ -199,9 +206,9 @@ bool FenceD3D11::Wait(ID3D11Device* aDevice) {
 
   RefPtr<ID3D11Fence> fence;
   {
-    MutexAutoLock lock(mMutex);
-    auto it = mWaitFenceMap.find(aDevice);
-    if (it == mWaitFenceMap.end()) {
+    MutexAutoLock lock(mWaitFences->mMutex);
+    auto it = mWaitFences->mFences.find(aDevice);
+    if (it == mWaitFences->mFences.end()) {
       RefPtr<ID3D11Device5> d3d11_5;
       auto hr = aDevice->QueryInterface(__uuidof(ID3D11Device5),
                                         getter_AddRefs(d3d11_5));
@@ -217,7 +224,7 @@ bool FenceD3D11::Wait(ID3D11Device* aDevice) {
                             << gfx::hexa(hr);
         return false;
       }
-      mWaitFenceMap.emplace(aDevice, fence);
+      mWaitFences->mFences.emplace(aDevice, fence);
     } else {
       fence = it->second;
     }
@@ -244,6 +251,37 @@ bool FenceD3D11::Wait(ID3D11Device* aDevice) {
     return false;
   }
 
+  return true;
+}
+
+bool FenceD3D11::WaitOnD3D12Queue(ID3D12Device* aDevice,
+                                  ID3D12CommandQueue* aQueue) {
+  if (!aDevice || !aQueue) {
+    return false;
+  }
+  RefPtr<ID3D12Fence> fence;
+  {
+    MutexAutoLock lock(mWaitFences->mMutex);
+    auto it = mWaitFences->mD3D12Fences.find(aDevice);
+    if (it == mWaitFences->mD3D12Fences.end()) {
+      HRESULT hr = aDevice->OpenSharedHandle(
+          mHandle->GetHandle(), __uuidof(ID3D12Fence),
+          (void**)(ID3D12Fence**)getter_AddRefs(fence));
+      if (FAILED(hr) || !fence) {
+        gfxCriticalNoteOnce << "Opening fence for D3D12 failed "
+                            << gfx::hexa(hr);
+        return false;
+      }
+      mWaitFences->mD3D12Fences.emplace(aDevice, fence);
+    } else {
+      fence = it->second;
+    }
+  }
+  HRESULT hr = aQueue->Wait(fence, mFenceValue);
+  if (FAILED(hr)) {
+    gfxCriticalNoteOnce << "D3D12 queue wait failed: " << gfx::hexa(hr);
+    return false;
+  }
   return true;
 }
 

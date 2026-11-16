@@ -11,6 +11,7 @@
 struct ID3D11Texture2D;
 struct ID3D12Device;
 struct ID3D12Resource;
+struct ID3D12CommandQueue;
 
 namespace mozilla {
 
@@ -39,7 +40,8 @@ class SharedTextureD3D11 final : public SharedTexture {
   virtual ~SharedTextureD3D11();
 
   void* GetSharedTextureHandle();
-  ID3D12Resource* GetD3D12Resource(ID3D12Device* aDevice);
+  ID3D12Resource* GetD3D12Resource(ID3D12Device* aDevice,
+                                   ID3D12CommandQueue* aQueue);
 
   Maybe<layers::SurfaceDescriptor> ToSurfaceDescriptor() override;
 

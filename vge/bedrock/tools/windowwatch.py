@@ -54,13 +54,44 @@ class WindowWatch:
         self.samples = []
         self.stop_flag = threading.Event()
         self.thread = threading.Thread(target=self.run, daemon=True)
+        self.rate_thread = threading.Thread(target=self.rate_run, daemon=True)
+        self.changes_per_second = []
 
     def start(self):
         self.thread.start()
+        self.rate_thread.start()
 
     def stop(self):
         self.stop_flag.set()
         self.thread.join(timeout=10)
+        self.rate_thread.join(timeout=10)
+
+    def rate_run(self):
+        previous = None
+        second_start = time.time()
+        grabs = 0
+        changes = 0
+        while not self.stop_flag.is_set():
+            hwnd = main_window(self.pid)
+            if not hwnd:
+                time.sleep(0.2)
+                continue
+            box = client_rect(hwnd)
+            cx, cy = (box[0] + box[2]) // 2, (box[1] + box[3]) // 2
+            try:
+                data = ImageGrab.grab(bbox=(cx - 100, cy - 100, cx + 100, cy + 100), all_screens=True).tobytes()
+            except OSError:
+                continue
+            grabs += 1
+            if previous is not None and data != previous:
+                changes += 1
+            previous = data
+            now = time.time()
+            if now - second_start >= 1.0:
+                self.changes_per_second.append({"changes": changes, "grabs": grabs})
+                second_start = now
+                grabs = 0
+                changes = 0
 
     def run(self):
         start = time.time()
@@ -115,6 +146,8 @@ class WindowWatch:
             "first_frozen_at": frozen[0] if frozen else None,
             "frozen_times": frozen[:40],
             "foreground_samples": sum(s["foreground"] for s in self.samples),
+            "visible_changes_per_s": [c["changes"] for c in self.changes_per_second],
+            "grabs_per_s": [c["grabs"] for c in self.changes_per_second],
         }
 
 

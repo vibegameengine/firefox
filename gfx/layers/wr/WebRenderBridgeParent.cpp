@@ -1867,7 +1867,6 @@ bool WebRenderBridgeParent::ProcessWebRenderParentCommands(
         mLateInit->mAsyncImageManager->UpdateAsyncImagePipeline(
             op.pipelineId(), op.scBounds(), op.rotation(), op.filter(),
             op.mixBlendMode());
-        MOZ_ASSERT_IF(IsRootWebRenderBridgeParent(), !pendingRemotetextures);
         mLateInit->mAsyncImageManager->ApplyAsyncImageForPipeline(
             op.pipelineId(), aTxn, txnForImageBridge, pendingOps,
             pendingRemotetextures);
@@ -1888,7 +1887,6 @@ bool WebRenderBridgeParent::ProcessWebRenderParentCommands(
         auto* pendingRemotetextures =
             mLateInit->mApi->GetPendingRemoteTextureInfoList();
 
-        MOZ_ASSERT_IF(IsRootWebRenderBridgeParent(), !pendingRemotetextures);
         mLateInit->mAsyncImageManager->ApplyAsyncImageForPipeline(
             op.pipelineId(), aTxn, txnForImageBridge, pendingOps,
             pendingRemotetextures);

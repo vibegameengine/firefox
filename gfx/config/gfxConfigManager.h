@@ -37,6 +37,8 @@ class gfxConfigManager {
         mWrLayerCompositorEnabled(false),
         mWrRequireAngle(false),
         mWrDCompWinEnabled(false),
+        mWrDCompAllowInParent(false),
+        mWrDCompIgnoreBlocklist(false),
         mWrCompositorDCompRequired(false),
         mWrForcePartialPresent(false),
         mWrPartialPresent(false),
@@ -90,6 +92,8 @@ class gfxConfigManager {
   bool mWrLayerCompositorEnabled;
   bool mWrRequireAngle;
   bool mWrDCompWinEnabled;
+  bool mWrDCompAllowInParent;
+  bool mWrDCompIgnoreBlocklist;
   bool mWrCompositorDCompRequired;
   bool mWrForcePartialPresent;
   bool mWrPartialPresent;

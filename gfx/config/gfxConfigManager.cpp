@@ -49,6 +49,10 @@ void gfxConfigManager::Init() {
 #ifdef XP_WIN
   mWrRequireAngle = StaticPrefs::gfx_webrender_require_angle_AtStartup();
   mWrDCompWinEnabled = StaticPrefs::gfx_webrender_dcomp_win_enabled_AtStartup();
+  mWrDCompAllowInParent =
+      Preferences::GetBool("gfx.webrender.dcomp-allow-in-parent", false);
+  mWrDCompIgnoreBlocklist =
+      Preferences::GetBool("gfx.webrender.dcomp-ignore-blocklist", false);
 #endif
 
   mWrEnvForceEnabled = gfxPlatform::WebRenderEnvvarEnabled();
@@ -262,9 +266,12 @@ void gfxConfigManager::ConfigureWebRender() {
                                  "FEATURE_FAILURE_DCOMP_PREF_DISABLED"_ns);
   }
 
-  ConfigureFromBlocklist(nsIGfxInfo::FEATURE_WEBRENDER_DCOMP, mFeatureWrDComp);
+  if (!mWrDCompIgnoreBlocklist) {
+    ConfigureFromBlocklist(nsIGfxInfo::FEATURE_WEBRENDER_DCOMP,
+                           mFeatureWrDComp);
+  }
 
-  if (!mFeatureGPUProcess->IsEnabled()) {
+  if (!mFeatureGPUProcess->IsEnabled() && !mWrDCompAllowInParent) {
     mFeatureWrDComp->Disable(FeatureStatus::Unavailable, "Requires GPU process",
                              "FEATURE_FAILURE_NO_GPU_PROCESS"_ns);
   }
