@@ -9,6 +9,8 @@
 #include "mozilla/webgpu/SharedTexture.h"
 
 struct ID3D11Texture2D;
+struct ID3D12Device;
+struct ID3D12Resource;
 
 namespace mozilla {
 
@@ -37,6 +39,7 @@ class SharedTextureD3D11 final : public SharedTexture {
   virtual ~SharedTextureD3D11();
 
   void* GetSharedTextureHandle();
+  ID3D12Resource* GetD3D12Resource(ID3D12Device* aDevice);
 
   Maybe<layers::SurfaceDescriptor> ToSurfaceDescriptor() override;
 
@@ -49,6 +52,8 @@ class SharedTextureD3D11 final : public SharedTexture {
   const RefPtr<gfx::FileHandleWrapper> mSharedHandle;
   const layers::CompositeProcessFencesHolderId mFencesHolderId;
   const RefPtr<layers::FenceD3D11> mWriteFence;
+  ID3D12Device* mD3D12Device = nullptr;
+  RefPtr<ID3D12Resource> mD3D12Resource;
 };
 
 }  // namespace webgpu

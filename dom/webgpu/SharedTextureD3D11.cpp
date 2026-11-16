@@ -5,6 +5,11 @@
 #include "SharedTextureD3D11.h"
 
 #include <d3d11.h>
+#include <d3d12.h>
+
+#include <atomic>
+
+#include "prenv.h"
 
 #include "mozilla/gfx/DeviceManagerDx.h"
 #include "mozilla/gfx/Logging.h"
@@ -13,6 +18,9 @@
 #include "mozilla/webgpu/WebGPUParent.h"
 
 namespace mozilla::webgpu {
+
+static std::atomic<int> sLiveSharedTextures{0};
+static std::atomic<int> sCreatedSharedTextures{0};
 
 // static
 UniquePtr<SharedTextureD3D11> SharedTextureD3D11::Create(
@@ -112,15 +120,44 @@ SharedTextureD3D11::SharedTextureD3D11(
       mFencesHolderId(aFencesHolderId),
       mWriteFence(std::move(aWriteFence)) {
   MOZ_ASSERT(mTexture);
+  int live = ++sLiveSharedTextures;
+  int created = ++sCreatedSharedTextures;
+  static const bool sLog = !!PR_GetEnv("VGE_WGPU_LOG");
+  if (sLog && created % 50 == 0) {
+    printf_stderr("VGEWGPU shared-textures created=%d live=%d\n", created,
+                  live);
+  }
 }
 
 SharedTextureD3D11::~SharedTextureD3D11() {
+  --sLiveSharedTextures;
   auto* fencesHolderMap = layers::CompositeProcessFencesHolderMap::Get();
   if (fencesHolderMap) {
     fencesHolderMap->Unregister(mFencesHolderId);
   } else {
     gfxCriticalNoteOnce << "CompositeProcessFencesHolderMap does not exist";
   }
+}
+
+ID3D12Resource* SharedTextureD3D11::GetD3D12Resource(ID3D12Device* aDevice) {
+  if (!GetSharedTextureHandle()) {
+    return nullptr;
+  }
+  if (!mD3D12Resource || mD3D12Device != aDevice) {
+    RefPtr<ID3D12Resource> resource;
+    HRESULT hr = aDevice->OpenSharedHandle(
+        mSharedHandle->GetHandle(), __uuidof(ID3D12Resource),
+        (void**)(ID3D12Resource**)getter_AddRefs(resource));
+    if (FAILED(hr) || !resource) {
+      gfxCriticalNoteOnce << "OpenSharedHandle for D3D12 failed: "
+                          << gfx::hexa(hr);
+      return nullptr;
+    }
+    mD3D12Resource = std::move(resource);
+    mD3D12Device = aDevice;
+  }
+  RefPtr<ID3D12Resource> result = mD3D12Resource;
+  return result.forget().take();
 }
 
 void* SharedTextureD3D11::GetSharedTextureHandle() {

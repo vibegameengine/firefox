@@ -4,6 +4,10 @@
 
 #include "WebGPUParent.h"
 
+#ifdef XP_WIN
+#  include <d3d12.h>
+#endif
+
 #include <set>
 
 #include "prenv.h"
@@ -82,6 +86,23 @@ extern void wgpu_server_ensure_shared_texture_for_readback(
 }
 
 #ifdef XP_WIN
+extern void* wgpu_server_get_shared_texture_d3d12_resource(
+    WGPUWebGPUParentPtr aParent, WGPUTextureId aId, void* aD3D12Device) {
+  auto* parent = static_cast<WebGPUParent*>(aParent);
+  auto texture = parent->GetSharedTexture(aId);
+  if (!texture) {
+    MOZ_ASSERT_UNREACHABLE("unexpected to be called");
+    return nullptr;
+  }
+  auto* textureD3D11 = texture->AsSharedTextureD3D11();
+  if (!textureD3D11) {
+    MOZ_ASSERT_UNREACHABLE("unexpected to be called");
+    return nullptr;
+  }
+  return textureD3D11->GetD3D12Resource(
+      static_cast<ID3D12Device*>(aD3D12Device));
+}
+
 extern void* wgpu_server_get_shared_texture_handle(WGPUWebGPUParentPtr aParent,
                                                    WGPUTextureId aId) {
   auto* parent = static_cast<WebGPUParent*>(aParent);

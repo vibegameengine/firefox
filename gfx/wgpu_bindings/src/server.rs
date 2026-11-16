@@ -1720,6 +1720,12 @@ extern "C" {
         parent: WebGPUParentPtr,
         id: id::TextureId,
     ) -> *mut core::ffi::c_void;
+    #[cfg(target_os = "windows")]
+    fn wgpu_server_get_shared_texture_d3d12_resource(
+        parent: WebGPUParentPtr,
+        id: id::TextureId,
+        device: *mut core::ffi::c_void,
+    ) -> *mut core::ffi::c_void;
     #[cfg(target_os = "linux")]
     fn wgpu_server_get_dma_buf_info(parent: WebGPUParentPtr, id: id::TextureId) -> DMABufInfo;
     #[cfg(target_os = "linux")]
@@ -1935,24 +1941,22 @@ impl Global {
             return false;
         }
 
-        let handle = unsafe { wgpu_server_get_shared_texture_handle(self.owner, texture_id) };
-        if handle.is_null() {
-            let msg = c"Failed to get shared texture handle";
+        let raw_resource = unsafe {
+            wgpu_server_get_shared_texture_d3d12_resource(
+                self.owner,
+                texture_id,
+                windows::core::Interface::as_raw(&dx12_device),
+            )
+        };
+        if raw_resource.is_null() {
+            let msg = c"Failed to get shared D3D12 resource";
             unsafe {
                 gfx_critical_note(msg.as_ptr());
             }
             return false;
         }
-        let mut resource: Option<Direct3D12::ID3D12Resource> = None;
-        let res =
-            unsafe { dx12_device.OpenSharedHandle(Foundation::HANDLE(handle), &mut resource) };
-        if res.is_err() || resource.is_none() {
-            let msg = c"Failed to open shared handle";
-            unsafe {
-                gfx_critical_note(msg.as_ptr());
-            }
-            return false;
-        }
+        let resource: Option<Direct3D12::ID3D12Resource> =
+            Some(unsafe { windows::core::Interface::from_raw(raw_resource) });
 
         let hal_texture = unsafe {
             <wgh::api::Dx12 as wgh::Api>::Device::texture_from_raw(
