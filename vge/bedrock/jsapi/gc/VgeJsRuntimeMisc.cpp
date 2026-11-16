@@ -111,6 +111,11 @@ void* js::TempAllocPolicy::onOutOfMemory(arena_id_t arenaId,
     if (nbytes >= kLargeAllocation && sLargeAllocationFailureCallback) {
       sLargeAllocationFailureCallback();
     }
+    static const bool sLog = !!getenv("VGE_GC_LOG");
+    if (sLog) {
+      fprintf(stderr, "VGEGC full reason=out_of_memory bytes=%zu\n", nbytes);
+      fflush(stderr);
+    }
     ctx->isolate->LowMemoryNotification();
     if (void* p = RetryAllocation(allocFunc, arenaId, nbytes, reallocPtr)) {
       return p;

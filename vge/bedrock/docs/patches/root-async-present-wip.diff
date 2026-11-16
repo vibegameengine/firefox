@@ -1,0 +1,177 @@
+diff --git a/dom/canvas/ClientWebGLContext.cpp b/dom/canvas/ClientWebGLContext.cpp
+index b9a1e47801..518f09356a 100644
+--- a/dom/canvas/ClientWebGLContext.cpp
++++ b/dom/canvas/ClientWebGLContext.cpp
+@@ -597,8 +597,7 @@ Maybe<layers::SurfaceDescriptor> ClientWebGLContext::GetFrontBuffer(
+     // If there are many flushed cmds, force synchronous IPC to avoid too many
+     // pending ipc messages. Otherwise don't sync for other cases to avoid any
+     // performance penalty.
+-    needsSync = XRE_IsParentProcess() ||
+-                gfx::gfxVars::WebglOopAsyncPresentForceSync() ||
++    needsSync = gfx::gfxVars::WebglOopAsyncPresentForceSync() ||
+                 info.flushesSinceLastCongestionCheck > tooManyFlushes;
+ 
+     // Only send over a remote texture descriptor if the WebGLChild actor is
+diff --git a/gfx/layers/wr/AsyncImagePipelineManager.cpp b/gfx/layers/wr/AsyncImagePipelineManager.cpp
+index 2df5d6756a..b47b74f7ba 100644
+--- a/gfx/layers/wr/AsyncImagePipelineManager.cpp
++++ b/gfx/layers/wr/AsyncImagePipelineManager.cpp
+@@ -4,6 +4,10 @@
+ 
+ #include "AsyncImagePipelineManager.h"
+ 
++#include <cinttypes>
++
++#include "prenv.h"
++
+ #include <algorithm>
+ #include <iterator>
+ 
+@@ -233,6 +237,12 @@ Maybe<TextureHost::ResourceUpdateOp> AsyncImagePipelineManager::UpdateImageKeys(
+   auto* wrapper = aTexture ? aTexture->AsRemoteTextureHostWrapper() : nullptr;
+   if (wrapper && !aPipeline->mImageHost->GetAsyncRef()) {
+     RemoteTextureMap::Get()->GetRemoteTexture(wrapper);
++    static const bool sRtLog = !!PR_GetEnv("VGE_RT_LOG");
++    if (sRtLog) {
++      printf_stderr("VGERT bind id=%" PRIu64 " ready=%d subtextures=%u\n",
++                    uint64_t(wrapper->GetRemoteTextureInfo().mTextureId),
++                    wrapper->IsReadyForRendering(), wrapper->NumSubTextures());
++    }
+   }
+ 
+   if (!aTexture || aTexture->NumSubTextures() == 0) {
+@@ -568,6 +578,15 @@ void AsyncImagePipelineManager::ApplyAsyncImageForPipeline(
+       texture != pipeline->mCurrentTexture && wrapper) {
+     aPendingRemoteTextures->mList.emplace(wrapper->GetRemoteTextureInfo());
+   }
++  static const bool sRtLog = !!PR_GetEnv("VGE_RT_LOG");
++  if (sRtLog) {
++    printf_stderr(
++        "VGERT apply pending=%d ops=%d texture=%d wrapper=%d same=%d id=%" PRIu64
++        "\n",
++        !!aPendingRemoteTextures, !!aPendingOps, !!texture, !!wrapper,
++        texture == pipeline->mCurrentTexture,
++        wrapper ? uint64_t(wrapper->GetRemoteTextureInfo().mTextureId) : 0);
++  }
+ 
+   if (aPendingOps && !pipeline->mImageHost->GetAsyncRef()) {
+     aPendingOps->mList.emplace(AsyncImagePipelineOp::ApplyAsyncImageForPipeline(
+diff --git a/gfx/layers/wr/WebRenderBridgeParent.cpp b/gfx/layers/wr/WebRenderBridgeParent.cpp
+index b32bf4975d..62de90b7a4 100644
+--- a/gfx/layers/wr/WebRenderBridgeParent.cpp
++++ b/gfx/layers/wr/WebRenderBridgeParent.cpp
+@@ -1867,7 +1867,6 @@ bool WebRenderBridgeParent::ProcessWebRenderParentCommands(
+         mLateInit->mAsyncImageManager->UpdateAsyncImagePipeline(
+             op.pipelineId(), op.scBounds(), op.rotation(), op.filter(),
+             op.mixBlendMode());
+-        MOZ_ASSERT_IF(IsRootWebRenderBridgeParent(), !pendingRemotetextures);
+         mLateInit->mAsyncImageManager->ApplyAsyncImageForPipeline(
+             op.pipelineId(), aTxn, txnForImageBridge, pendingOps,
+             pendingRemotetextures);
+@@ -1888,7 +1887,6 @@ bool WebRenderBridgeParent::ProcessWebRenderParentCommands(
+         auto* pendingRemotetextures =
+             mLateInit->mApi->GetPendingRemoteTextureInfoList();
+ 
+-        MOZ_ASSERT_IF(IsRootWebRenderBridgeParent(), !pendingRemotetextures);
+         mLateInit->mAsyncImageManager->ApplyAsyncImageForPipeline(
+             op.pipelineId(), aTxn, txnForImageBridge, pendingOps,
+             pendingRemotetextures);
+diff --git a/gfx/webrender_bindings/WebRenderAPI.cpp b/gfx/webrender_bindings/WebRenderAPI.cpp
+index fc9b42d34f..34c5cdeee6 100644
+--- a/gfx/webrender_bindings/WebRenderAPI.cpp
++++ b/gfx/webrender_bindings/WebRenderAPI.cpp
+@@ -4,6 +4,10 @@
+ 
+ #include "WebRenderAPI.h"
+ 
++#include <cinttypes>
++
++#include "prenv.h"
++
+ #include "GLContext.h"
+ #include "TextDrawTarget.h"
+ #include "malloc_decls.h"
+@@ -460,7 +464,7 @@ void WebRenderAPI::UpdateDebugFlags(uint64_t aFlags) {
+ }
+ 
+ void WebRenderAPI::SendTransaction(TransactionBuilder& aTxn) {
+-  if (mRootApi && mRootApi->mRendererDestroyed) {
++  if (GetRootAPI()->mRendererDestroyed) {
+     return;
+   }
+ 
+@@ -479,6 +483,11 @@ void WebRenderAPI::SendTransaction(TransactionBuilder& aTxn) {
+   }
+ 
+   if (!mPendingWrTransactionEvents.empty()) {
++    static const bool sRtLog = !!PR_GetEnv("VGE_RT_LOG");
++    if (sRtLog) {
++      printf_stderr("VGERT queue events=%zu root=%d\n",
++                    mPendingWrTransactionEvents.size(), !mRootApi);
++    }
+     mPendingWrTransactionEvents.emplace(
+         WrTransactionEvent::Transaction(this, aTxn));
+     HandleWrTransactionEvents(RemoteTextureWaitType::AsyncWait);
+@@ -492,11 +501,6 @@ void WebRenderAPI::SendTransaction(TransactionBuilder& aTxn) {
+ }
+ 
+ layers::RemoteTextureInfoList* WebRenderAPI::GetPendingRemoteTextureInfoList() {
+-  if (!mRootApi) {
+-    // root api does not support async wait RemoteTexture.
+-    return nullptr;
+-  }
+-
+   if (!mPendingRemoteTextureInfoList) {
+     mPendingRemoteTextureInfoList = MakeUnique<layers::RemoteTextureInfoList>();
+   }
+@@ -505,11 +509,6 @@ layers::RemoteTextureInfoList* WebRenderAPI::GetPendingRemoteTextureInfoList() {
+ 
+ layers::AsyncImagePipelineOps* WebRenderAPI::GetPendingAsyncImagePipelineOps(
+     TransactionBuilder& aTxn) {
+-  if (!mRootApi) {
+-    // root api does not support async wait RemoteTexture.
+-    return nullptr;
+-  }
+-
+   if (!mPendingAsyncImagePipelineOps ||
+       mPendingAsyncImagePipelineOps->mTransaction != aTxn.Raw()) {
+     if (mPendingAsyncImagePipelineOps &&
+@@ -533,7 +532,12 @@ bool WebRenderAPI::CheckIsRemoteTextureReady(
+   MOZ_ASSERT(aList);
+ 
+   RefPtr<WebRenderAPI> self = this;
+-  auto callback = [self](const layers::RemoteTextureInfo&) {
++  auto callback = [self](const layers::RemoteTextureInfo& aInfo) {
++    static const bool sRtLog = !!PR_GetEnv("VGE_RT_LOG");
++    if (sRtLog) {
++      printf_stderr("VGERT ready-callback id=%" PRIu64 "\n",
++                    uint64_t(aInfo.mTextureId));
++    }
+     RefPtr<nsIRunnable> runnable = NewRunnableMethod<RemoteTextureWaitType>(
+         "WebRenderAPI::HandleWrTransactionEvents", self,
+         &WebRenderAPI::HandleWrTransactionEvents,
+@@ -542,10 +546,15 @@ bool WebRenderAPI::CheckIsRemoteTextureReady(
+   };
+ 
+   bool isReady = true;
++  static const bool sRtLog = !!PR_GetEnv("VGE_RT_LOG");
+   while (!aList->mList.empty() && isReady) {
+     auto& front = aList->mList.front();
+     isReady &= layers::RemoteTextureMap::Get()->CheckRemoteTextureReady(
+         front, callback);
++    if (sRtLog) {
++      printf_stderr("VGERT check id=%" PRIu64 " ready=%d root=%d\n",
++                    uint64_t(front.mTextureId), isReady, !mRootApi);
++    }
+     if (isReady) {
+       aList->mList.pop();
+     }
+@@ -601,7 +610,7 @@ void WebRenderAPI::HandleWrTransactionEvents(RemoteTextureWaitType aType) {
+   // SendTransaction checked when they were queued. Once the renderer is gone
+   // there is nothing left to submit to: drain the queue without waiting on
+   // remote textures, and without sending anything to the render backend.
+-  const bool rendererDestroyed = mRootApi && mRootApi->mRendererDestroyed;
++  const bool rendererDestroyed = GetRootAPI()->mRendererDestroyed;
+   if (rendererDestroyed) {
+     aType = RemoteTextureWaitType::FlushWithoutWait;
+   }

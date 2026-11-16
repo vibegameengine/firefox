@@ -272,6 +272,12 @@ size_t V8HeapUsed(v8::Isolate* aIsolate) {
 
 void RunFullGC(JSContext* aCx, JS::GCOptions aOptions, JS::GCReason aReason) {
   EnsureHooks(aCx);
+  static const bool sLog = !!getenv("VGE_GC_LOG");
+  if (sLog) {
+    fprintf(stderr, "VGEGC full reason=%s options=%d\n",
+            JS::ExplainGCReason(aReason), int(aOptions));
+    fflush(stderr);
+  }
   GcState& state = StateOf(aCx->runtime);
   bool wasDriving = state.drivingGc;
   state.drivingGc = true;

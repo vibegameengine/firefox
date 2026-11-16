@@ -72,19 +72,23 @@ def parse_frames(text):
 
 def parse_gc(text):
     pauses = []
-    for line in text.splitlines():
-        if "mark=" not in line or "pause=" not in line:
-            continue
-        fields = dict(re.findall(r"([\w.]+)=([\d.]+)", line))
-        if float(fields.get("mark", 0)) >= 1:
-            pauses.append(float(fields["pause"]))
+    reasons = {}
+    for match in re.finditer(r'"pause":([\d.]+),"mutator":[\d.]+,"gc":"mc".*?"reason":"([^"]*)"', text):
+        pauses.append(float(match[1]))
+        reasons[match[2]] = reasons.get(match[2], 0) + 1
+    full = {}
+    for match in re.finditer(r"VGEGC full reason=(\S+)", text):
+        full[match[1]] = full.get(match[1], 0) + 1
     pauses.sort()
     if not pauses:
-        return {"mark_compacts": 0}
+        return {"mark_compacts": 0, "embedder_full": full}
     return {
         "mark_compacts": len(pauses),
         "pause_median_ms": pauses[len(pauses) // 2],
         "pause_max_ms": pauses[-1],
+        "over16_ms": sum(p > 16 for p in pauses),
+        "v8_reasons": reasons,
+        "embedder_full": full,
     }
 
 
@@ -118,6 +122,7 @@ def main():
     env["VGE_FRAME_PROBE"] = str(PROBE).replace("/", "\\")
     if args.gc:
         env["VGE_V8_FLAGS"] = "--trace-gc-nvp"
+        env["VGE_GC_LOG"] = "1"
     trace_path = RESULTS / f"{args.label}.trace.txt"
     if args.profile:
         env["MOZ_PROFILER_STARTUP"] = "1"

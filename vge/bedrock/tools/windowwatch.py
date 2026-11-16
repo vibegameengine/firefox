@@ -13,6 +13,11 @@ user32.WindowFromPoint.restype = W.HWND
 user32.GetAncestor.argtypes = [W.HWND, W.UINT]
 user32.GetAncestor.restype = W.HWND
 GA_ROOT = 2
+HWND_TOPMOST = W.HWND(-1)
+SWP_NOSIZE = 0x0001
+SWP_NOMOVE = 0x0002
+SWP_NOACTIVATE = 0x0010
+user32.SetWindowPos.argtypes = [W.HWND, W.HWND, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, W.UINT]
 
 
 def main_window(pid):
@@ -40,7 +45,8 @@ def client_rect(hwnd):
 
 
 class WindowWatch:
-    def __init__(self, pid, period=2.0, shots=None):
+    def __init__(self, pid, period=2.0, shots=None, topmost=True):
+        self.topmost = topmost
         self.shots = shots
         self.pid = pid
         self.period = period
@@ -58,10 +64,18 @@ class WindowWatch:
     def run(self):
         start = time.time()
         previous = None
+        while self.topmost and time.time() - start < 15 and not self.stop_flag.is_set():
+            hwnd = main_window(self.pid)
+            if hwnd:
+                user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
+                break
+            time.sleep(0.1)
         while not self.stop_flag.wait(self.period):
             hwnd = main_window(self.pid)
             if not hwnd:
                 continue
+            if self.topmost:
+                user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
             box = client_rect(hwnd)
             center = W.POINT((box[0] + box[2]) // 2, (box[1] + box[3]) // 2)
             top = user32.WindowFromPoint(center)
