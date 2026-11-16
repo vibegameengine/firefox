@@ -643,6 +643,10 @@ JSContext* JS_NewContext(uint32_t aMaxBytes, JSRuntime* aParentRuntime) {
   v8::Isolate::CreateParams params;
   params.array_buffer_allocator =
       v8::ArrayBuffer::Allocator::NewDefaultAllocator();
+  MEMORYSTATUSEX memoryStatus = {sizeof(memoryStatus)};
+  if (GlobalMemoryStatusEx(&memoryStatus)) {
+    params.constraints.ConfigureDefaults(memoryStatus.ullTotalPhys, 0);
+  }
   rt->cppHeap =
       v8::CppHeap::Create(sPlatform.get(), v8::CppHeapCreateParams({}))
           .release();

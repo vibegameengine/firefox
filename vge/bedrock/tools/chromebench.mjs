@@ -11,7 +11,8 @@ const label = process.argv[2] ?? "chrome";
 const seconds = Number(process.argv[3] ?? 80);
 const results = "C:/Projects/gecko-build-logs/bench";
 const tools = "C:/Projects/gecko/vge/bedrock/tools";
-const chrome = "C:/Users/pavel/AppData/Local/ms-playwright/chromium-1234/chrome-win64/chrome.exe";
+const chrome = process.env.CHROME_EXE ?? "C:/Users/pavel/AppData/Local/ms-playwright/chromium-1228/chrome-win64/chrome.exe";
+const chromeDir = path.basename(path.dirname(path.dirname(chrome)));
 const slots = path.join(os.homedir(), ".claude/skills/browser-slots/browser-slots.mjs");
 const name = `chromebench-${label}`;
 
@@ -20,7 +21,7 @@ function powershell(command) {
 }
 
 function chromePids() {
-  return powershell("(Get-Process chrome | Where-Object { $_.Path -like '*chromium-1234*' }).Id")
+  return powershell(`(Get-Process chrome | Where-Object { $_.Path -like '*${chromeDir}*' }).Id`)
     .split(/\s+/)
     .filter(Boolean);
 }
@@ -43,7 +44,7 @@ function memory(file) {
 function videoMemory() {
   const value = powershell(
     "$c = Get-Counter '\\GPU Process Memory(*)\\Dedicated Usage' -ErrorAction SilentlyContinue; " +
-      `$ids = (Get-Process chrome | Where-Object { $_.Path -like '*chromium-1234*' }).Id; ` +
+      `$ids = (Get-Process chrome | Where-Object { $_.Path -like '*${chromeDir}*' }).Id; ` +
       "$sum = 0; foreach ($s in $c.CounterSamples) { if ($s.InstanceName -match 'pid_(\\d+)_' -and $ids -contains [int]$Matches[1]) { $sum += $s.CookedValue } }; " +
       "[int]($sum / 1MB)",
   );
@@ -85,20 +86,35 @@ execFileSync("node", [slots, "acquire-perf", name, "--yes-timing", "Chromium bas
 let browser;
 try {
   const probe = readFileSync(`${tools}/../test/frame-probe.js`, "utf8");
-  browser = await chromium.launch({ headless: false, executablePath: chrome, args: ["--window-size=1280,800"] });
+  const extra = (process.env.CHROME_ARGS ?? "").split(" ").filter(Boolean);
+  browser = await chromium.launch({
+    headless: false,
+    executablePath: chrome,
+    args: ["--window-size=1280,800", ...extra],
+  });
   const page = await browser.newPage({ viewport: { width: 1264, height: 761 } });
   const lines = [];
   page.on("console", (message) => {
     if (message.text().includes("frameprobe")) lines.push(message.text());
   });
+  const trace = process.env.CHROME_TRACE;
+  if (trace) {
+    await browser.startTracing(page, {
+      path: `${results}/${label}.trace.json`,
+      categories: ["v8", "disabled-by-default-v8.gc", "devtools.timeline", "blink.user_timing"],
+    });
+  }
   await page.goto("https://claybound-56949.web.app/");
   await page.evaluate(probe);
   const pid = powershell(
-    "(Get-Process chrome | Where-Object { $_.Path -like '*chromium-1234*' -and $_.MainWindowHandle -ne 0 } | Select-Object -First 1).Id",
+    `(Get-Process chrome | Where-Object { $_.Path -like '*${chromeDir}*' -and $_.MainWindowHandle -ne 0 } | Select-Object -First 1).Id`,
   );
   const watchFile = `${results}/${label}.screen.json`;
   const watch = spawn("python", [`${tools}/windowwatch.py`, pid, String(seconds), watchFile], { stdio: "inherit" });
   await new Promise((resolve) => watch.on("exit", resolve));
+  if (trace) {
+    await browser.stopTracing();
+  }
   const before = memory("before");
   const video = videoMemory();
   trimAll();

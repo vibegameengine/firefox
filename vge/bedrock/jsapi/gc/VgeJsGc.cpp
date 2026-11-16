@@ -479,13 +479,11 @@ JS_PUBLIC_API void JS::AbortIncrementalGC(JSContext* cx) {
 }
 
 JS_PUBLIC_API bool JS::IsIncrementalGCInProgress(JSContext* cx) {
-  GcState* state = MaybeStateOf(cx->runtime);
-  return state && state->v8Marking;
+  return false;
 }
 
 JS_PUBLIC_API bool JS::IsIncrementalGCInProgress(JSRuntime* rt) {
-  GcState* state = MaybeStateOf(rt);
-  return state && state->v8Marking;
+  return false;
 }
 
 JS_PUBLIC_API bool JS::WasIncrementalGC(JSRuntime* rt) {
