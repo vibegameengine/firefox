@@ -493,7 +493,8 @@ bool DCLayerTree::InitializeVideoOverlaySupport() {
   // the contents of a UniquePtr via std::move().)
   sGpuOverlayInfo = info.release();
 
-  if (auto* gpuParent = gfx::GPUParent::GetSingleton()) {
+  if (auto* gpuParent = XRE_IsGPUProcess() ? gfx::GPUParent::GetSingleton()
+                                            : nullptr) {
     gpuParent->NotifyOverlayInfo(GetOverlayInfo());
   }
 
@@ -1316,7 +1317,8 @@ bool DCLayerTree::SupportsSwapChainTearing() {
       return false;
     }
 
-    if (auto* gpuParent = gfx::GPUParent::GetSingleton()) {
+    if (auto* gpuParent = XRE_IsGPUProcess() ? gfx::GPUParent::GetSingleton()
+                                            : nullptr) {
       gpuParent->NotifySwapChainInfo(
           layers::SwapChainInfo(!!presentAllowTearing));
     } else if (XRE_IsParentProcess()) {

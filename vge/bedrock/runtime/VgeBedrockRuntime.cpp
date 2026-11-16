@@ -808,6 +808,7 @@ int VgeBedrock_RunLayoutTest(int aArgc, char** aArgv) {
       }
     }
     gfxPlatform::GetPlatform();
+    gfx::DeviceManagerDx::Get()->CreateDirectCompositionDevice();
     gfx::GPUProcessManager::Get()->EnsureProtocolsReady();
     result = aArgc > 2 && !strcmp(aArgv[1], "--window")
                  ? vge::bedrock::RunWindow(aArgv[2], 1280, 800)

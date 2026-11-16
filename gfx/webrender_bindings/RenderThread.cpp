@@ -6,6 +6,9 @@
 
 #include "prenv.h"
 
+#include <map>
+#include <string>
+
 #include "GLContext.h"
 #include "GeckoProfiler.h"
 #include "GfxInfoBase.h"
@@ -346,8 +349,27 @@ void RenderThread::DoAccumulateMemoryReport(
   size_t renderTextureMemory = 0;
   {
     MutexAutoLock lock(mRenderTextureMapLock);
+    static const bool sRtLog = !!PR_GetEnv("VGE_RT_LOG");
+    std::map<std::string, std::pair<size_t, size_t>> byType;
     for (const auto& entry : mRenderTextures) {
-      renderTextureMemory += entry.second->Bytes();
+      size_t bytes = entry.second->Bytes();
+      renderTextureMemory += bytes;
+      if (sRtLog) {
+        RenderTextureHost* host = entry.second;
+        const char* kind = host->AsRenderDXGITextureHost()       ? "dxgi"
+                           : host->AsRenderDXGIYCbCrTextureHost() ? "dxgi-ycbcr"
+                           : host->AsRenderDcompSurfaceTextureHost()
+                               ? "dcomp-surface"
+                           : host->AsRenderTextureHostSWGL() ? "cpu-buffer"
+                                                              : "other";
+        auto& slot = byType[kind];
+        slot.first++;
+        slot.second += bytes;
+      }
+    }
+    for (const auto& [name, value] : byType) {
+      printf_stderr("VGERT render-texture type=%s count=%zu mb=%zu\n",
+                    name.c_str(), value.first, value.second / 1048576);
     }
   }
   aReport.render_texture_hosts = renderTextureMemory;
