@@ -168,6 +168,7 @@ def main():
                 time.sleep(min(5, max(0, deadline - time.time())))
                 if args.video_series and process.poll() is None:
                     video_series.append(gpu_memory(process.pid))
+            window_end = log_path.stat().st_size
             if args.trace:
                 deadline = time.time() + 180
                 while time.time() < deadline and process.poll() is None and not trace_path.exists():
@@ -203,14 +204,16 @@ def main():
     finally:
         slot("release", f"bench-{args.label}")
 
-    text = log_path.read_text(encoding="utf-8", errors="replace")
+    raw = log_path.read_bytes()
+    text = raw.decode("utf-8", errors="replace")
+    window = raw[:window_end].decode("utf-8", errors="replace")
     result = {
         "label": args.label,
         "crashed": crashed,
         "exit_code": exit_code,
         "memory": memory,
         "video_mb": video,
-        "frames": parse_frames(text),
+        "frames": parse_frames(window),
         "gc": parse_gc(text),
         "gray_worst_ms": parse_gray(text),
         "screen": screen,
