@@ -1,0 +1,31 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>dom cycles</title>
+<div id="host"></div>
+<script>
+const host = document.getElementById("host");
+let made = 0;
+const live = [];
+function cycle() {
+  const el = document.createElement("div");
+  const span = document.createElement("span");
+  el.appendChild(span);
+  el.expando = { el, payload: new Array(64).fill(made) };
+  el.addEventListener("click", () => el.expando.payload.length + span.textContent.length);
+  span.onclick = () => el;
+  return el;
+}
+function tick() {
+  for (let i = 0; i < 200; i++) {
+    cycle();
+    made++;
+  }
+  const kept = cycle();
+  host.appendChild(kept);
+  live.push(kept);
+  if (live.length > 50) host.removeChild(live.shift());
+  document.title = "cycles " + made;
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+</script>

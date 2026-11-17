@@ -611,6 +611,13 @@ class CellGrayMarkingClient final : public v8::GrayMarkingClient {
     mRootsMs = (mRootsEnd - start).ToMilliseconds();
   }
 
+  bool TracesWrappers() const override { return true; }
+
+  void TraceWrapper(void* aWrappable, v8::GrayWrapperMarker& aMarker) override {
+    static_cast<Anchor*>(static_cast<v8::Object::Wrappable*>(aWrappable))
+        ->TraceGray(mState.runtime, aMarker);
+  }
+
   void GrayMarkingFinished(const v8::GrayMarkingResult& aResult) override {
     mozilla::TimeStamp start = mozilla::TimeStamp::Now();
     GrayInput input;

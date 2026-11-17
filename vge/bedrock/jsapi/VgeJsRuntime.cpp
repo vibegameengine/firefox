@@ -498,10 +498,29 @@ Anchor::~Anchor() {
   FinalizeAnchoredCell(rt, cell);
 }
 
-void Anchor::Trace(cppgc::Visitor* aVisitor) const {
-  ObjectCell* cell = mCell;
-  JSRuntime* rt = Runtime();
-  SlotTracer tracer(rt, aVisitor);
+class GrayWrapperSlotTracer final : public JS::CallbackTracer {
+ public:
+  GrayWrapperSlotTracer(JSRuntime* aRuntime, v8::GrayWrapperMarker& aMarker)
+      : JS::CallbackTracer(aRuntime, JS::TracerKind::Callback,
+                           JS::WeakMapTraceAction::TraceKeysAndValues),
+        mMarker(aMarker) {}
+
+  bool onChild(JS::GCCellPtr aThing, const char* aName) override {
+    CellTail* tail = TailOf(aThing.asCell(), aThing.kind());
+    if (tail && !tail->traced.IsEmpty()) {
+      mMarker.Mark(tail->traced);
+      tail->tracedEpoch = runtime()->tracedEpoch;
+    }
+    return true;
+  }
+
+ private:
+  v8::GrayWrapperMarker& mMarker;
+};
+
+void TraceAnchoredCell(ObjectCell* aCell, JSTracer* aTracer) {
+  ObjectCell* cell = aCell;
+  JSTracer& tracer = *aTracer;
   Shape* shape = cell->shape;
   JS::Value* slots = shape->isProxy
                          ? &cell->proxyData()->values()->privateSlot
@@ -529,7 +548,19 @@ void Anchor::Trace(cppgc::Visitor* aVisitor) const {
   if (shape->isProxy) {
     cell->proxyData()->handler->trace(&tracer, cell->asObject());
   }
+}
+
+void Anchor::Trace(cppgc::Visitor* aVisitor) const {
+  SlotTracer tracer(Runtime(), aVisitor);
+  TraceAnchoredCell(mCell, &tracer);
   static_cast<v8::JSVisitor*>(aVisitor)->Trace(mWrapper);
+}
+
+void Anchor::TraceGray(JSRuntime* aRuntime,
+                       v8::GrayWrapperMarker& aMarker) const {
+  GrayWrapperSlotTracer tracer(aRuntime, aMarker);
+  TraceAnchoredCell(mCell, &tracer);
+  aMarker.Mark(mWrapper);
 }
 
 void Anchor::SetWrapper(v8::Isolate* aIsolate,

@@ -30,6 +30,7 @@
 #include "cppgc/garbage-collected.h"
 #include "cppgc/visitor.h"
 #include "v8-cppgc.h"
+#include "v8-gray-marking.h"
 #include "v8.h"
 
 namespace vge::jsapi {
@@ -187,6 +188,7 @@ class Anchor final : public v8::Object::Wrappable {
   explicit Anchor(ObjectCell* aCell) : mCell(aCell) {}
   ~Anchor();
   void Trace(cppgc::Visitor* aVisitor) const override;
+  void TraceGray(JSRuntime* aRuntime, v8::GrayWrapperMarker& aMarker) const;
   ObjectCell* Cell() const { return mCell; }
   void TraceSlotValue(cppgc::Visitor* aVisitor, const JS::Value& aValue) const;
   void SetWrapper(v8::Isolate* aIsolate, v8::Local<v8::Object> aWrapper);

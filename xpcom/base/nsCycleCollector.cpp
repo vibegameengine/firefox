@@ -3598,6 +3598,16 @@ void nsCycleCollector::CleanupAfterCollection() {
 
   TimeStamp endTime = TimeStamp::Now();
   TimeDuration interval = endTime - mCollectionStart;
+  static const bool sVgeLog = !!getenv("VGE_GC_LOG");
+  if (sVgeLog) {
+    fprintf(stderr,
+            "VGECC ms %.3f slices %u visited_rc %u visited_gc %u freed_rc %u "
+            "freed_gc %u\n",
+            interval.ToMilliseconds(), mResults.mNumSlices,
+            mResults.mVisitedRefCounted, mResults.mVisitedGCed,
+            mResults.mFreedRefCounted, mResults.mFreedGCed);
+    fflush(stderr);
+  }
 #ifdef COLLECT_TIME_DEBUG
   printf("cc: total cycle collector time was %ums in %u slices\n",
          (uint32_t)interval.ToMilliseconds(), mResults.mNumSlices);
