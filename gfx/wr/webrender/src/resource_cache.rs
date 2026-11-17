@@ -1894,7 +1894,7 @@ impl ResourceCache {
         //
         // [1] https://bugzilla.mozilla.org/show_bug.cgi?id=1494099
         self.gc_render_targets(
-            64 * 1024 * 1024,
+            0,
             32 * 1024 * 1024 * 10,
             60,
         );
