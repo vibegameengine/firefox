@@ -93,36 +93,9 @@ void RefreshTracedNodes(JSRuntime* aRuntime) {
   aRuntime->tracedEpoch = epoch == UINT8_MAX ? 1 : epoch + 1;
 }
 
-void WeakCellCallback(const v8::WeakCallbackInfo<CellTail>& aInfo) {
-  CellTail* tail = aInfo.GetParameter();
-  tail->handle.Reset();
-  if (tail->anchor) {
-    NoteDeadAnchoredCell(tail);
-    return;
-  }
-  switch (tail->kind) {
-    case CellKind::Object:
-      FreeObjectCell(reinterpret_cast<ObjectCell*>(
-          reinterpret_cast<uint8_t*>(tail) - offsetof(ObjectCell, tail)));
-      break;
-    case CellKind::String: {
-      StringCell* cell = reinterpret_cast<StringCell*>(
-          reinterpret_cast<uint8_t*>(tail) - offsetof(StringCell, tail));
-      FreeStringChars(cell);
-      FreeCell(cell, sizeof(StringCell));
-      break;
-    }
-    default:
-      FreeCell(reinterpret_cast<uint8_t*>(tail) - offsetof(StringCell, tail),
-               sizeof(StringCell));
-      break;
-  }
-}
-
 void MakeWeak(CellTail* aTail) {
   if (aTail->anchor) {
-    aTail->handle.SetWeak(aTail, WeakCellCallback,
-                          v8::WeakCallbackType::kParameter);
+    aTail->handle.SetWeak();
     if (JSRuntime* rt = Runtime()) {
       rt->phantomTails.erase(aTail);
     }

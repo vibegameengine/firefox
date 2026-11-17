@@ -387,6 +387,14 @@ void EnsureCellEdges(GcState& aState) {
 
 namespace {
 
+size_t AnchoredCells(GcState& aState) {
+  size_t count = 0;
+  for (ObjectCell* cell : aState.runtime->objectCells) {
+    count += cell->tail.anchor != nullptr;
+  }
+  return count;
+}
+
 size_t GlobalHandlesKb(GcState& aState) {
   v8::HeapStatistics stats;
   aState.runtime->isolate->GetHeapStatistics(&stats);
@@ -436,7 +444,7 @@ class CellGrayMarkingClient final : public v8::GrayMarkingClient {
               "VGEGRAY roots %.3f closure %.3f client %.3f color %.3f weak "
               "%.3f edges %.3f gray %zu edges %zu ephemerons %zu cells %zu "
               "young %zu traced %zu globals_kb %zu strings %lld "
-              "created_strings %lld\n",
+              "created_strings %lld anchored %zu phantom %zu\n",
               mRootsMs, (start - mRootsEnd).ToMilliseconds(),
               (end - start).ToMilliseconds(),
               (colored - start).ToMilliseconds(),
@@ -446,7 +454,8 @@ class CellGrayMarkingClient final : public v8::GrayMarkingClient {
               mState.runtime->youngTails.size(),
               mState.runtime->tracedTails.size(), GlobalHandlesKb(mState),
               static_cast<long long>(gLiveStringCells.load()),
-              static_cast<long long>(gCreatedStringCells.load()));
+              static_cast<long long>(gCreatedStringCells.load()),
+              AnchoredCells(mState), mState.runtime->phantomTails.size());
       fflush(stderr);
     }
   }
