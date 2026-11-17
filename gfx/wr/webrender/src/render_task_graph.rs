@@ -585,12 +585,14 @@ impl RenderTaskGraphBuilder {
                                 size.height <= max_shared_surface_size;
 
                             let surface_size = if can_use_shared_surface {
-                                let needed = size.width.max(size.height);
-                                let mut side = max_shared_surface_size.min(512);
-                                while side < needed && side < max_shared_surface_size {
-                                    side = (side * 2).min(max_shared_surface_size);
-                                }
-                                DeviceIntSize::new(side, side)
+                                let fit = |needed: i32| {
+                                    let mut side = max_shared_surface_size.min(512);
+                                    while side < needed && side < max_shared_surface_size {
+                                        side = (side * 2).min(max_shared_surface_size);
+                                    }
+                                    side
+                                };
+                                DeviceIntSize::new(fit(size.width), fit(size.height))
                             } else {
                                 // Round up size here to avoid constant re-allocs during resizing
                                 DeviceIntSize::new(

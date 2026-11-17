@@ -20,6 +20,15 @@ pub use etagere::AllocatorOptions as ShelfAllocatorOptions;
 pub use etagere::BucketedAtlasAllocator as BucketedShelfAllocator;
 pub use etagere::AtlasAllocator as ShelfAllocator;
 
+const TEXTURE_UNIT_MIN_SIZE: i32 = 512;
+const TEXTURE_UNIT_MIN_COLUMN_WIDTH: i32 = 1024;
+
+fn unit_options(size: i32, options: &ShelfAllocatorOptions) -> ShelfAllocatorOptions {
+    let mut options = *options;
+    options.num_columns = options.num_columns.min((size / TEXTURE_UNIT_MIN_COLUMN_WIDTH).max(1));
+    options
+}
+
 /// ID of an allocation within a given allocator.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "capture", derive(Serialize))]
@@ -74,6 +83,7 @@ struct TextureUnit<Allocator> {
     // of it, in which case we want to postpone deleting the texture to the
     // next frame.
     delay_deallocation: bool,
+    size: i32,
 }
 
 #[cfg_attr(feature = "capture", derive(Serialize))]
@@ -111,23 +121,35 @@ impl<Allocator: AtlasAllocator, TextureParameters> AllocatorList<Allocator, Text
             }
         }
 
-        // Need to create a new texture to hold the allocation.
-        let texture_id = texture_alloc_cb(size2(self.size, self.size), &self.texture_parameters);
-        let unit_index = self.units.len();
-
-        self.units.push(TextureUnit {
-            allocator: Allocator::new(self.size, &self.atlas_parameters),
-            handles: FastHashMap::default(),
-            texture_id,
-            delay_deallocation: false,
-        });
-
-        let (alloc_id, rect) = self.units[unit_index]
-            .allocator
-            .allocate(requested_size)
-            .unwrap();
-
-        (texture_id, alloc_id, rect)
+        let content: i64 = self.units
+            .iter()
+            .map(|unit| unit.allocator.allocated_space() as i64)
+            .sum();
+        let mut side = self.size.min(TEXTURE_UNIT_MIN_SIZE);
+        while (side as i64) * (side as i64) < content && side < self.size {
+            side = (side * 2).min(self.size);
+        }
+        loop {
+            let mut allocator = Allocator::new(side, &self.atlas_parameters);
+            if let Some((alloc_id, rect)) = allocator.allocate(requested_size) {
+                let texture_id = texture_alloc_cb(size2(side, side), &self.texture_parameters);
+                let unit = TextureUnit {
+                    allocator,
+                    handles: FastHashMap::default(),
+                    texture_id,
+                    delay_deallocation: false,
+                    size: side,
+                };
+                if self.units.first().map_or(false, |first| side > first.size) {
+                    self.units.insert(0, unit);
+                } else {
+                    self.units.push(unit);
+                }
+                return (texture_id, alloc_id, rect);
+            }
+            assert!(side < self.size, "bug: allocation does not fit an empty texture");
+            side = (side * 2).min(self.size);
+        }
     }
 
     pub fn deallocate(&mut self, texture_id: CacheTextureId, alloc_id: AllocId) {
@@ -246,7 +268,7 @@ impl AtlasAllocator for BucketedShelfAllocator {
     type Parameters = ShelfAllocatorOptions;
 
     fn new(size: i32, options: &Self::Parameters) -> Self {
-        BucketedShelfAllocator::with_options(size2(size, size), options)
+        BucketedShelfAllocator::with_options(size2(size, size), &unit_options(size, options))
     }
 
     fn allocate(&mut self, size: DeviceIntSize) -> Option<(AllocId, DeviceIntRect)> {
@@ -276,7 +298,7 @@ impl AtlasAllocator for ShelfAllocator {
     type Parameters = ShelfAllocatorOptions;
 
     fn new(size: i32, options: &Self::Parameters) -> Self {
-        ShelfAllocator::with_options(size2(size, size), options)
+        ShelfAllocator::with_options(size2(size, size), &unit_options(size, options))
     }
 
     fn allocate(&mut self, size: DeviceIntSize) -> Option<(AllocId, DeviceIntRect)> {
