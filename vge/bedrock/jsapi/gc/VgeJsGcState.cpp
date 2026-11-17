@@ -289,11 +289,17 @@ void RunFullGC(JSContext* aCx, JS::GCOptions aOptions, JS::GCReason aReason) {
   state.currentReason = aReason;
   state.currentOptions = aOptions;
   v8::Isolate* isolate = aCx->isolate;
+  JSRuntime* rt = aCx->runtime;
+  bool wasSynchronous = rt->synchronousGc;
+  rt->synchronousGc = true;
   if (aOptions == JS::GCOptions::Shutdown) {
     isolate->LowMemoryNotification();
   } else {
     isolate->MemoryPressureNotification(v8::MemoryPressureLevel::kCritical);
   }
+  EnsureGrayBits(state);
+  FinishPhantomSweep(rt);
+  rt->synchronousGc = wasSynchronous;
   state.drivingGc = wasDriving;
   if (sLog) {
     fprintf(stderr, "VGEGC done majors=%llu grayValid=%d marking=%d\n",

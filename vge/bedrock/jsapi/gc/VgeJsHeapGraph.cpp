@@ -743,9 +743,12 @@ class CellGrayMarkingClient final : public v8::GrayMarkingClient {
         CurrentPlatform()->GetForegroundTaskRunner(rt->isolate);
     mState.pendingGray = std::async(
         std::launch::async,
-        [input = std::move(input), runner, rt, epoch]() mutable {
+        [input = std::move(input), runner, rt, epoch,
+         postApply = !rt->synchronousGc]() mutable {
           GrayResult result = BuildGrayResult(std::move(input));
-          runner->PostTask(std::make_unique<GrayApplyTask>(rt, epoch));
+          if (postApply) {
+            runner->PostTask(std::make_unique<GrayApplyTask>(rt, epoch));
+          }
           return result;
         });
     mState.grayPending = true;

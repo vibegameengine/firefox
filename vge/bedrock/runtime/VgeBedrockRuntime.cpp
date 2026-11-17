@@ -14,6 +14,7 @@
 #include "nsThreadUtils.h"
 #include "prinrval.h"
 
+#include "mozilla/AppShutdown.h"
 #include "mozilla/IOInterposer.h"
 #include "mozilla/Logging.h"
 #include "mozilla/Preferences.h"
@@ -592,6 +593,11 @@ int RunWindow(const char* aUrl, int aWidth, int aHeight) {
     }
     return false;
   });
+  if (nsCOMPtr<nsIBaseWindow> content = do_QueryInterface(docShell)) {
+    content->Destroy();
+  }
+  docShell = nullptr;
+  baseWindow->Destroy();
   return 0;
 }
 
@@ -816,9 +822,14 @@ int VgeBedrock_RunLayoutTest(int aArgc, char** aArgv) {
     result = aArgc > 2 && !strcmp(aArgv[1], "--window")
                  ? vge::bedrock::RunWindow(aArgv[2], 1280, 800)
                  : vge::bedrock::RunLayoutTest(aArgv[1], 1280, 720);
-    observers->NotifyObservers(nullptr, "profile-before-change", u"shutdown");
-    observers->NotifyObservers(nullptr, "profile-before-change-qm",
-                               u"shutdown");
+    AppShutdown::AdvanceShutdownPhase(ShutdownPhase::AppShutdownConfirmed);
+    AppShutdown::AdvanceShutdownPhase(ShutdownPhase::AppShutdownNetTeardown);
+    AppShutdown::AdvanceShutdownPhase(ShutdownPhase::AppShutdownTeardown);
+    AppShutdown::AdvanceShutdownPhase(ShutdownPhase::AppShutdown,
+                                      u"shutdown");
+    AppShutdown::AdvanceShutdownPhase(ShutdownPhase::AppShutdownQM,
+                                      u"shutdown");
+    AppShutdown::AdvanceShutdownPhase(ShutdownPhase::AppShutdownTelemetry);
   }
   NS_ShutdownXPCOM(nullptr);
   profiler_shutdown();

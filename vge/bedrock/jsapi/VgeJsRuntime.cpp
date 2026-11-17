@@ -193,7 +193,8 @@ class PhantomSweepTask final : public v8::Task {
 };
 
 void SchedulePhantomSweep(JSRuntime* aRuntime) {
-  if (aRuntime->phantomSweepPosted || aRuntime->deadTails.empty()) {
+  if (aRuntime->phantomSweepPosted || aRuntime->deadTails.empty() ||
+      aRuntime->synchronousGc) {
     return;
   }
   aRuntime->phantomSweepPosted = true;
@@ -532,6 +533,12 @@ void GCEpilogue(v8::Isolate* aIsolate, v8::GCType aType,
   }
 }
 
+}
+
+void FinishPhantomSweep(JSRuntime* aRuntime) {
+  if (!aRuntime->phantomSweepPosted && !aRuntime->deadTails.empty()) {
+    SweepPhantomCells(aRuntime);
+  }
 }
 
 void TraceEnteredRealmGlobals(JSRuntime* aRuntime, JSTracer* aTracer) {

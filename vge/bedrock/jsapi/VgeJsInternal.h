@@ -295,6 +295,7 @@ class Anchor final : public v8::Object::Wrappable {
 };
 
 void RegisterAnchor(JSRuntime* aRuntime, Anchor* aAnchor);
+void FinishPhantomSweep(JSRuntime* aRuntime);
 void TakeGrayAnchors(std::vector<Anchor*>* aOut);
 void ClearGrayAnchors();
 extern size_t gBarrierMarksInGC[3];
@@ -384,6 +385,7 @@ struct JSRuntime {
   std::vector<vge::jsapi::StringCell*> managedStrings;
   std::vector<vge::jsapi::ObjectCell*> managedObjects;
   bool sweepingManaged = false;
+  bool synchronousGc = false;
   bool phantomSweepPosted = false;
   std::vector<JS::Realm*> realms;
   std::vector<JS::Realm*> dyingRealms;
