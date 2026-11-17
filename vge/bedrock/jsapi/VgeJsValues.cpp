@@ -88,6 +88,24 @@ std::u16string Content(StringCell* aCell) {
   return out;
 }
 
+v8::Local<v8::Context> ContextForObject(JSContext* aCx,
+                                        v8::Local<v8::Object> aObject) {
+  v8::Local<v8::Context> ctx;
+  if (aObject->GetCreationContext().ToLocal(&ctx)) {
+    return ctx;
+  }
+  ctx = aCx->v8Context();
+  if (!ctx.IsEmpty()) {
+    return ctx;
+  }
+  for (JS::Realm* realm : aCx->runtime->realms) {
+    if (!realm->context.IsEmpty()) {
+      return realm->context.Get(aCx->isolate);
+    }
+  }
+  return ctx;
+}
+
 }
 
 ObjectCell* NewObjectCell(JSContext* aCx, Shape* aShape,
@@ -117,7 +135,7 @@ ObjectCell* NewObjectCell(JSContext* aCx, Shape* aShape,
       cell->words[0] = reinterpret_cast<uintptr_t>(dynamic);
     }
   }
-  v8::Local<v8::Context> ctx = aCx->v8Context();
+  v8::Local<v8::Context> ctx = ContextForObject(aCx, aObject);
   aObject->SetPrivate(ctx, CellKey(aCx), v8::External::New(aCx->isolate, cell, v8::kExternalPointerTypeTagDefault))
       .Check();
   if (aAnchored) {
@@ -138,7 +156,7 @@ JSObject* ObjectFromV8(JSContext* aCx, v8::Local<v8::Object> aObject) {
   if (aObject.IsEmpty()) {
     return nullptr;
   }
-  v8::Local<v8::Context> ctx = aCx->v8Context();
+  v8::Local<v8::Context> ctx = ContextForObject(aCx, aObject);
   v8::Local<v8::Value> existing;
   if (aObject->GetPrivate(ctx, CellKey(aCx)).ToLocal(&existing) &&
       existing->IsExternal()) {

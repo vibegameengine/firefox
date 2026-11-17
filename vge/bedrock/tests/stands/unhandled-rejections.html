@@ -1,0 +1,32 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>unhandled rejections under GC</title>
+<canvas id="c" width="64" height="64"></canvas>
+<script>
+const keep = [];
+let rejected = 0;
+function churn() {
+  const junk = [];
+  for (let i = 0; i < 20000; i++) {
+    junk.push({ i, s: "x" + i, a: [i, i + 1] });
+  }
+  return junk.length;
+}
+async function failing(n) {
+  await null;
+  throw new TypeError("stand rejection " + n);
+}
+function tick() {
+  for (let i = 0; i < 50; i++) {
+    failing(rejected++);
+    Promise.reject(new Error("direct " + rejected));
+  }
+  const p = Promise.reject(new Error("late"));
+  setTimeout(() => p.catch(() => {}), 50);
+  keep.push(churn());
+  if (keep.length > 100) keep.length = 0;
+  document.title = "rejected " + rejected;
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+</script>
