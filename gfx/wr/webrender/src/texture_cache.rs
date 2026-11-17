@@ -776,9 +776,28 @@ impl TextureCache {
         let area_threshold = 512*512;
 
         let mut changes = Vec::new();
-        allocator_lists[idx].try_compaction(area_threshold, &mut changes);
+        let next_id = &mut self.next_id;
+        let pending_updates = &mut self.pending_updates;
+        let shrinking = allocator_lists[idx].try_compaction(area_threshold, &mut changes, &mut |size, parameters| {
+            let texture_id = *next_id;
+            next_id.0 += 1;
+            pending_updates.push_alloc(
+                texture_id,
+                TextureCacheAllocInfo {
+                    target: ImageBufferKind::Texture2D,
+                    width: size.width,
+                    height: size.height,
+                    format: parameters.formats.internal,
+                    filter: parameters.filter,
+                    is_shared_cache: true,
+                    has_depth: false,
+                    category: TextureCacheCategory::Atlas,
+                },
+            );
+            texture_id
+        });
 
-        if changes.is_empty() {
+        if changes.is_empty() && !shrinking {
             // Nothing to do, we'll try another texture type next frame.
             self.shared_textures.next_compaction_idx = (self.shared_textures.next_compaction_idx + 1) % allocator_lists.len();
         }

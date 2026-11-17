@@ -22,6 +22,7 @@ pub use etagere::AtlasAllocator as ShelfAllocator;
 
 const TEXTURE_UNIT_MIN_SIZE: i32 = 512;
 const TEXTURE_UNIT_MIN_COLUMN_WIDTH: i32 = 1024;
+const TEXTURE_UNIT_SHRINK_FILL_TENTHS: i64 = 9;
 
 fn unit_options(size: i32, options: &ShelfAllocatorOptions) -> ShelfAllocatorOptions {
     let mut options = *options;
@@ -339,12 +340,35 @@ impl<P> AllocatorList<ShelfAllocator, P> {
         &mut self,
         max_pixels: i32,
         changes: &mut Vec<CompactionChange>,
-    ) {
+        texture_alloc_cb: &mut dyn FnMut(DeviceIntSize, &P) -> CacheTextureId,
+    ) -> bool {
         // The goal here is to consolidate items in the first texture by moving them from the last.
+
+        if self.units.len() == 1 {
+            let unit = &self.units[0];
+            let half = unit.size / 2;
+            let half_area = half as i64 * half as i64;
+            let fits = half >= self.size.min(TEXTURE_UNIT_MIN_SIZE)
+                && (unit.allocator.allocated_space() as i64) * 10 <= half_area * TEXTURE_UNIT_SHRINK_FILL_TENTHS
+                && unit.allocator.iter().all(|alloc| {
+                    alloc.rectangle.width() <= half && alloc.rectangle.height() <= half
+                });
+            if fits {
+                let texture_id = texture_alloc_cb(size2(half, half), &self.texture_parameters);
+                self.units.insert(0, TextureUnit {
+                    allocator: <ShelfAllocator as AtlasAllocator>::new(half, &self.atlas_parameters),
+                    handles: FastHashMap::default(),
+                    texture_id,
+                    delay_deallocation: true,
+                    size: half,
+                });
+                return true;
+            }
+        }
 
         if self.units.len() < 2 {
             // Nothing to do we are already "compact".
-            return;
+            return false;
         }
 
         let last_unit = self.units.len() - 1;
@@ -399,6 +423,8 @@ impl<P> AllocatorList<ShelfAllocator, P> {
                 break;
             }
         }
+
+        false
     }
 
 }
