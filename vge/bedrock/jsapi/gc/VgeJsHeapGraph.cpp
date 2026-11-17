@@ -207,8 +207,11 @@ class GrayRootTracer final : public JS::CallbackTracer {
         mMarker(aMarker) {}
 
   bool onChild(JS::GCCellPtr aThing, const char* aName) override {
+    if (aThing && IsVgeCell(aThing.asCell())) {
+      MarkManagedCell(TailOf(aThing.asCell(), aThing.kind()), 5);
+    }
     CellTail* tail = LiveTail(aThing);
-    if (tail) {
+    if (tail && !tail->handle.IsEmpty()) {
       mMarker.Mark(tail->handle);
     }
     return true;

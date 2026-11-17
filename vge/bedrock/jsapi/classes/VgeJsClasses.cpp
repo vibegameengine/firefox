@@ -464,6 +464,7 @@ void SlotWriteBarrier(JSContext* aCx, const JS::Value& aValue) {
   }
   CellTail* tail = TailOf(reinterpret_cast<js::gc::Cell*>(aValue.toGCThing()),
                           aValue.traceKind());
+  MarkManagedCell(tail, 3);
   if (!tail || tail->handle.IsEmpty()) {
     return;
   }

@@ -448,6 +448,10 @@ void MarkForBarrier(const JS::Value& aValue) {
   if (!aValue.isGCThing()) {
     return;
   }
+  if (gc::IsVgeCell(aValue.toGCThing())) {
+    MarkManagedCell(TailOf(reinterpret_cast<js::gc::Cell*>(aValue.toGCThing()),
+                           aValue.traceKind()), 4);
+  }
   JSRuntime* rt = Runtime();
   if (!rt || !rt->cppHeap ||
       !cppgc::subtle::HeapState::IsMarking(rt->cppHeap->GetHeapHandle())) {

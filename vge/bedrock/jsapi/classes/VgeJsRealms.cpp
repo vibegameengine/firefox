@@ -297,6 +297,7 @@ bool WrapObjectImpl(JSContext* aCx, JS::MutableHandleObject aObj) {
     return false;
   }
   v8::Global<v8::Object>& entry = extra.wrappers[target.get()];
+  ObjectCell::from(target.get())->tail.wrapperKey = true;
   entry.Reset(aCx->isolate, ToV8(aCx, wrapper));
   entry.SetWeak();
   aObj.set(wrapper);
@@ -1186,6 +1187,7 @@ void js::RemapRemoteWindowProxies(JSContext* aCx,
     v8::HandleScope scope(aCx->isolate);
     v8::Global<v8::Object>& entry =
         CompartmentData(CompartmentOf(dead)).wrappers[aTarget.get()];
+    ObjectCell::from(aTarget.get())->tail.wrapperKey = true;
     entry.Reset(aCx->isolate, ToV8(aCx, dead));
     entry.SetWeak();
   }

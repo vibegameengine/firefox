@@ -155,10 +155,10 @@ JSObject* ObjectFromV8(JSContext* aCx, v8::Local<v8::Object> aObject) {
   }
   v8::Local<v8::Context> ctx = ContextForObject(aCx, aObject);
   v8::Local<v8::Value> existing;
-  if (aObject->GetPrivate(ctx, CellKey(aCx)).ToLocal(&existing) &&
-      existing->IsExternal()) {
-    return static_cast<ObjectCell*>(existing.As<v8::External>()->Value(v8::kExternalPointerTypeTagDefault))
-        ->asObject();
+  if (aObject->GetPrivate(ctx, CellKey(aCx)).ToLocal(&existing)) {
+    if (ObjectCell* cell = CellOfExternal(aObject, existing)) {
+      return cell->asObject();
+    }
   }
   JS::Realm* realm = aCx->realm();
   v8::Local<v8::Context> creation;
@@ -173,8 +173,34 @@ JSObject* ObjectFromV8(JSContext* aCx, v8::Local<v8::Object> aObject) {
   Shape* shape = ShapeFor(ClassForScriptObject(aObject), realm);
   ObjectCell* cell = NewObjectCell(aCx, shape, aObject, false);
   cell->tail.managed = true;
+  cell->tail.marked = 7;
   aCx->runtime->managedObjects.push_back(cell);
   return cell->asObject();
+}
+
+ObjectCell* CellOfExternal(v8::Local<v8::Object> aObject,
+                           v8::Local<v8::Value> aExternal) {
+  if (aExternal.IsEmpty() || !aExternal->IsExternal()) {
+    return nullptr;
+  }
+  ObjectCell* cell = static_cast<ObjectCell*>(
+      aExternal.As<v8::External>()->Value(v8::kExternalPointerTypeTagDefault));
+  if (cell->tail.handle.IsEmpty()) {
+    return nullptr;
+  }
+  if (cell->tail.handle == aObject) {
+    return cell;
+  }
+  const JSClass* clasp = cell->shape ? cell->shape->base.clasp : nullptr;
+  if (clasp && (clasp->flags & JSCLASS_IS_GLOBAL)) {
+    v8::Isolate* isolate = v8::Isolate::GetCurrent();
+    v8::Local<v8::Value> inner =
+        v8::InnerGlobalOfProxy(isolate, cell->tail.handle.Get(isolate));
+    if (!inner.IsEmpty() && inner == aObject) {
+      return cell;
+    }
+  }
+  return nullptr;
 }
 
 JSObject* PinCell(JSObject* aObj) {
@@ -185,13 +211,6 @@ JSObject* PinCell(JSObject* aObj) {
 }
 
 void DetachManagedObjectCell(JSContext* aCx, ObjectCell* aCell) {
-  if (aCell->tail.handle.IsEmpty()) {
-    return;
-  }
-  v8::HandleScope scope(aCx->isolate);
-  v8::Local<v8::Object> object =
-      aCell->tail.handle.Get(aCx->isolate).As<v8::Object>();
-  object->DeletePrivate(ContextForObject(aCx, object), CellKey(aCx)).Check();
   aCell->tail.handle.Reset();
 }
 
@@ -203,11 +222,99 @@ v8::Local<v8::Object> ToV8(JSContext* aCx, JSObject* aObj) {
   return cell->tail.handle.Get(aCx->isolate).As<v8::Object>();
 }
 
+StringCell* CellOfV8String(v8::Isolate* aIsolate,
+                           v8::Local<v8::String> aString) {
+  v8::String::Encoding encoding;
+  v8::String::ExternalStringResourceBase* resource =
+      aString->GetExternalStringResourceBase(aIsolate, &encoding);
+  if (!resource) {
+    return nullptr;
+  }
+  const void* vtable = *reinterpret_cast<const void* const*>(resource);
+  if (encoding == v8::String::ONE_BYTE_ENCODING &&
+      vtable == CellOneByteResource::Vtable()) {
+    return static_cast<CellOneByteResource*>(resource)->Cell();
+  }
+  if (encoding == v8::String::TWO_BYTE_ENCODING &&
+      vtable == CellTwoByteResource::Vtable()) {
+    return static_cast<CellTwoByteResource*>(resource)->Cell();
+  }
+  return nullptr;
+}
+
+namespace {
+
+bool ExternalizeIntoCell(JSContext* aCx, v8::Local<v8::String> aString,
+                         StringCell* aCell) {
+  if (aCell->latin1()) {
+    if (!aString->CanMakeExternal(v8::String::ONE_BYTE_ENCODING)) {
+      return false;
+    }
+    auto* resource = new CellOneByteResource(
+        aCell, static_cast<const char*>(aCell->chars), aCell->length(), true);
+    if (aString->MakeExternal(aCx->isolate, resource)) {
+      return true;
+    }
+    resource->Release();
+    return false;
+  }
+  if (!aString->CanMakeExternal(v8::String::TWO_BYTE_ENCODING)) {
+    return false;
+  }
+  auto* resource = new CellTwoByteResource(
+      aCell, static_cast<const uint16_t*>(aCell->chars), aCell->length(), true);
+  if (aString->MakeExternal(aCx->isolate, resource)) {
+    return true;
+  }
+  resource->Release();
+  return false;
+}
+
+v8::Local<v8::String> NewExternalFromCell(JSContext* aCx, StringCell* aCell) {
+  v8::Local<v8::String> s;
+  if (aCell->latin1()) {
+    auto* resource = new CellOneByteResource(
+        aCell, static_cast<const char*>(aCell->chars), aCell->length(), true);
+    if (!v8::String::NewExternalOneByte(aCx->isolate, resource).ToLocal(&s)) {
+      resource->Release();
+      return {};
+    }
+    return s;
+  }
+  auto* resource = new CellTwoByteResource(
+      aCell, static_cast<const uint16_t*>(aCell->chars), aCell->length(), true);
+  if (!v8::String::NewExternalTwoByte(aCx->isolate, resource).ToLocal(&s)) {
+    resource->Release();
+    return {};
+  }
+  return s;
+}
+
+v8::Local<v8::String> NewCopyFromCell(JSContext* aCx, StringCell* aCell) {
+  if (aCell->latin1()) {
+    return v8::String::NewFromOneByte(
+               aCx->isolate, static_cast<const uint8_t*>(aCell->chars),
+               v8::NewStringType::kNormal, int(aCell->length()))
+        .ToLocalChecked();
+  }
+  return v8::String::NewFromTwoByte(
+             aCx->isolate, static_cast<const uint16_t*>(aCell->chars),
+             v8::NewStringType::kNormal, int(aCell->length()))
+      .ToLocalChecked();
+}
+
+}
+
 JSString* StringFromV8(JSContext* aCx, v8::Local<v8::String> aString) {
+  if (StringCell* known = CellOfV8String(aCx->isolate, aString)) {
+    MarkManagedCell(&known->tail, 7);
+    return known->asString();
+  }
   StringCell* cell = FillString(aCx, aString, false);
   cell->tail.managed = true;
+  cell->tail.marked = 7;
   aCx->runtime->managedStrings.push_back(cell);
-  BindCellHandle(aCx, &cell->tail, aString, false);
+  ExternalizeIntoCell(aCx, aString, cell);
   return cell->asString();
 }
 
@@ -243,16 +350,11 @@ v8::Local<v8::String> ToV8(JSContext* aCx, JSString* aStr) {
   StringCell* cell = StringCell::from(aStr);
   if (cell->tail.handle.IsEmpty()) {
     v8::Local<v8::String> s;
-    if (cell->latin1()) {
-      s = v8::String::NewFromOneByte(
-              aCx->isolate, static_cast<const uint8_t*>(cell->chars),
-              v8::NewStringType::kNormal, int(cell->length()))
-              .ToLocalChecked();
-    } else {
-      s = v8::String::NewFromTwoByte(
-              aCx->isolate, static_cast<const uint16_t*>(cell->chars),
-              v8::NewStringType::kNormal, int(cell->length()))
-              .ToLocalChecked();
+    if (cell->tail.managed && cell->length() > 0) {
+      s = NewExternalFromCell(aCx, cell);
+    }
+    if (s.IsEmpty()) {
+      s = NewCopyFromCell(aCx, cell);
     }
     BindCellHandle(aCx, &cell->tail, s, cell->tail.isAtom);
     return s;

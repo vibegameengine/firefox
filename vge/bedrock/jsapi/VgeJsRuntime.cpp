@@ -33,6 +33,7 @@ class RootMarker final : public JS::CallbackTracer {
 
   bool onChild(JS::GCCellPtr aThing, const char* aName) override {
     CellTail* tail = TailOf(aThing.asCell(), aThing.kind());
+    MarkManagedCell(tail, 1);
     if (!tail || tail->rootedThisGC || tail->handle.IsEmpty()) {
       return true;
     }
@@ -59,62 +60,25 @@ void FreeDeadCell(CellTail* aTail) {
   FreeCell(cell, sizeof(StringCell));
 }
 
-class ManagedCellMarker final : public JS::CallbackTracer {
- public:
-  explicit ManagedCellMarker(JSRuntime* aRuntime)
-      : JS::CallbackTracer(aRuntime, JS::TracerKind::Callback,
-                           JS::WeakMapTraceAction::TraceKeysAndValues) {}
-
-  bool onChild(JS::GCCellPtr aThing, const char* aName) override {
-    if (!aThing.is<JSString>() && !aThing.is<JSObject>()) {
-      return true;
-    }
-    CellTail* tail = TailOf(aThing.asCell(), aThing.kind());
-    if (tail && tail->managed) {
-      tail->marked = true;
-    }
-    return true;
-  }
-};
-
-void TraceAllRoots(JSRuntime* aRuntime, JSTracer* aTracer);
-void FreeDeadCell(CellTail* aTail);
-
-void SweepManagedCells(JSRuntime* aRuntime) {
-  if (aRuntime->managedStrings.empty() && aRuntime->managedObjects.empty()) {
-    return;
-  }
-  ManagedCellMarker marker(aRuntime);
-  TraceAllRoots(aRuntime, &marker);
-  if (aRuntime->grayRootTracer) {
-    JS::SliceBudget budget = JS::SliceBudget::unlimited();
-    aRuntime->grayRootTracer(&marker, budget, aRuntime->grayRootTracerData);
-  }
-  for (ObjectCell* cell : aRuntime->objectCells) {
-    if (!cell->tail.classFinalized) {
-      TraceAnchoredCell(cell, &marker);
-    }
-  }
-  if (!aRuntime->managedObjects.empty() && aRuntime->weakPointerSweep) {
-    aRuntime->sweepingManaged = true;
-    aRuntime->sweepingWeakPointers = true;
-    aRuntime->weakPointerSweep(aRuntime);
-    aRuntime->sweepingWeakPointers = false;
-    aRuntime->sweepingManaged = false;
-  }
+void ReleaseUnmarkedManagedCells(JSRuntime* aRuntime) {
+  size_t objectSites[8] = {};
+  size_t stringSites[8] = {};
   std::vector<ObjectCell*>& objects = aRuntime->managedObjects;
   size_t keptObjects = 0;
   for (ObjectCell* cell : objects) {
     if (!cell->tail.managed) {
       continue;
     }
+    objectSites[cell->tail.marked & 7]++;
     if (cell->tail.marked) {
-      cell->tail.marked = false;
+      cell->tail.marked = 0;
       objects[keptObjects++] = cell;
       continue;
     }
     if (aRuntime->mainContext) {
-      ForgetWrapperKey(aRuntime->mainContext, cell->asObject());
+      if (cell->tail.wrapperKey) {
+        ForgetWrapperKey(aRuntime->mainContext, cell->asObject());
+      }
       DetachManagedObjectCell(aRuntime->mainContext, cell);
     }
     FreeObjectCell(cell);
@@ -123,19 +87,35 @@ void SweepManagedCells(JSRuntime* aRuntime) {
   std::vector<StringCell*>& cells = aRuntime->managedStrings;
   size_t kept = 0;
   for (StringCell* cell : cells) {
+    stringSites[cell->tail.marked & 7]++;
     if (cell->tail.marked) {
-      cell->tail.marked = false;
+      cell->tail.marked = 0;
+      cells[kept++] = cell;
+    } else if (cell->tail.charRefs.load(std::memory_order_acquire)) {
       cells[kept++] = cell;
     } else {
       FreeDeadCell(&cell->tail);
     }
   }
   cells.resize(kept);
+  static const bool sLog = !!getenv("VGE_GC_LOG");
+  if (sLog) {
+    fprintf(stderr,
+            "VGEMANAGED inGC %d objects free %zu root %zu wrap %zu slotw %zu "
+            "heapw %zu gray %zu proxy %zu new %zu strings free %zu root %zu "
+            "wrap %zu slotw %zu heapw %zu gray %zu proxy %zu new %zu\n",
+            aRuntime->inGC, objectSites[0], objectSites[1], objectSites[2],
+            objectSites[3], objectSites[4], objectSites[5], objectSites[6],
+            objectSites[7], stringSites[0], stringSites[1], stringSites[2],
+            stringSites[3], stringSites[4], stringSites[5], stringSites[6],
+            stringSites[7]);
+    fflush(stderr);
+  }
 }
 
 void SweepPhantomCells(JSRuntime* aRuntime) {
   aRuntime->phantomSweepPosted = false;
-  SweepManagedCells(aRuntime);
+  mozilla::TimeStamp sweepStart = mozilla::TimeStamp::Now();
   std::vector<CellTail*> dead;
   dead.swap(aRuntime->deadTails);
   for (CellTail* tail : dead) {
@@ -158,6 +138,8 @@ void SweepPhantomCells(JSRuntime* aRuntime) {
     }
     v8::HeapStatistics stats;
     aRuntime->isolate->GetHeapStatistics(&stats);
+    fprintf(stderr, "VGESWEEP total %.3f\n",
+            (mozilla::TimeStamp::Now() - sweepStart).ToMilliseconds());
     fprintf(stderr,
             "VGECENSUS objects %zu anchored %zu plain_weak %zu plain_strong %zu "
             "empty %zu strings %lld atoms %zu symbols %zu global_handles %zu\n",
@@ -196,9 +178,7 @@ class PhantomSweepTask final : public v8::Task {
 };
 
 void SchedulePhantomSweep(JSRuntime* aRuntime) {
-  if (aRuntime->phantomSweepPosted ||
-      (aRuntime->deadTails.empty() && aRuntime->managedStrings.empty() &&
-       aRuntime->managedObjects.empty())) {
+  if (aRuntime->phantomSweepPosted || aRuntime->deadTails.empty()) {
     return;
   }
   aRuntime->phantomSweepPosted = true;
@@ -462,6 +442,7 @@ void GCEpilogue(v8::Isolate* aIsolate, v8::GCType aType,
   CollectResetCells(rt);
   SchedulePhantomSweep(rt);
   if (!rt->inGC) {
+    ReleaseUnmarkedManagedCells(rt);
     FinalizeDeadAnchoredCells(rt);
     return;
   }
@@ -479,10 +460,13 @@ void GCEpilogue(v8::Isolate* aIsolate, v8::GCType aType,
       cb(gcx, JSFINALIZE_GROUP_PREPARE, data);
     }
     if (rt->weakPointerSweep) {
+      rt->sweepingManaged = true;
       rt->sweepingWeakPointers = true;
       rt->weakPointerSweep(rt);
       rt->sweepingWeakPointers = false;
+      rt->sweepingManaged = false;
     }
+    ReleaseUnmarkedManagedCells(rt);
     for (auto& [cb, data] : rt->finalizeCallbacks) {
       cb(gcx, JSFINALIZE_GROUP_START, data);
     }
@@ -549,6 +533,7 @@ class GrayWrapperSlotTracer final : public JS::CallbackTracer {
 
   bool onChild(JS::GCCellPtr aThing, const char* aName) override {
     CellTail* tail = TailOf(aThing.asCell(), aThing.kind());
+    MarkManagedCell(tail, 2);
     if (tail && !tail->handle.IsEmpty()) {
       mMarker.Mark(tail->handle);
     }
@@ -559,7 +544,7 @@ class GrayWrapperSlotTracer final : public JS::CallbackTracer {
   v8::GrayWrapperMarker& mMarker;
 };
 
-void TraceAnchoredCell(ObjectCell* aCell, JSTracer* aTracer) {
+void TraceCellSlots(ObjectCell* aCell, JSTracer* aTracer) {
   ObjectCell* cell = aCell;
   JSTracer& tracer = *aTracer;
   Shape* shape = cell->shape;
@@ -585,13 +570,25 @@ void TraceAnchoredCell(ObjectCell* aCell, JSTracer* aTracer) {
   if (shape->isProxy && cell->proxyData()->expando) {
     JS::TraceRoot(&tracer, &cell->proxyData()->expando, "expando");
   }
+}
+
+void TraceCellHooks(ObjectCell* aCell, JSTracer* aTracer) {
+  Shape* shape = aCell->shape;
+  if (!shape) {
+    return;
+  }
   const JSClass* clasp = shape->base.clasp;
   if (clasp && clasp->hasTrace()) {
-    clasp->doTrace(&tracer, cell->asObject());
+    clasp->doTrace(aTracer, aCell->asObject());
   }
-  if (shape->isProxy && cell->proxyData()->handler) {
-    cell->proxyData()->handler->trace(&tracer, cell->asObject());
+  if (shape->isProxy && aCell->proxyData()->handler) {
+    aCell->proxyData()->handler->trace(aTracer, aCell->asObject());
   }
+}
+
+void TraceAnchoredCell(ObjectCell* aCell, JSTracer* aTracer) {
+  TraceCellSlots(aCell, aTracer);
+  TraceCellHooks(aCell, aTracer);
 }
 
 void Anchor::Trace(cppgc::Visitor* aVisitor) const {

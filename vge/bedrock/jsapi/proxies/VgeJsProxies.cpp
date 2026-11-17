@@ -1016,6 +1016,11 @@ JS_PUBLIC_API void js::detail::SetValueInProxy(JS::Value* slot,
                                                const JS::Value& value) {
   bool changed = *slot != value;
   *slot = value;
+  if (value.isGCThing() &&
+      vge::jsapi::gc::IsVgeCell(value.toGCThing())) {
+    vge::jsapi::MarkManagedCell(vge::jsapi::TailOf(reinterpret_cast<js::gc::Cell*>(value.toGCThing()),
+                           value.traceKind()), 6);
+  }
   if (!changed || !Runtime()) {
     return;
   }

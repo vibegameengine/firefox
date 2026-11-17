@@ -239,12 +239,13 @@ JS::GCCellPtr CellForV8Value(JSContext* aCx, v8::Local<v8::Value> aValue) {
     return JS::GCCellPtr();
   }
   if (!obj->GetPrivate(ctx, aCx->runtime->cellKey.Get(aCx->isolate))
-           .ToLocal(&existing) ||
-      !existing->IsExternal()) {
+           .ToLocal(&existing)) {
     return JS::GCCellPtr();
   }
-  auto* cell =
-      static_cast<ObjectCell*>(existing.As<v8::External>()->Value(v8::kExternalPointerTypeTagDefault));
+  ObjectCell* cell = CellOfExternal(obj, existing);
+  if (!cell) {
+    return JS::GCCellPtr();
+  }
   return JS::GCCellPtr(cell->asObject());
 }
 

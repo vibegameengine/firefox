@@ -234,53 +234,35 @@ std::string Format(const char* aFormat, ...) {
   return buffer;
 }
 
-class LatinExternal final : public v8::String::ExternalOneByteStringResource {
- public:
-  LatinExternal(const JS::Latin1Char* aChars, size_t aLength)
-      : mChars(reinterpret_cast<const char*>(aChars)), mLength(aLength) {}
-  const char* data() const override { return mChars; }
-  size_t length() const override { return mLength; }
-
- private:
-  const char* mChars;
-  size_t mLength;
-};
-
-class TwoByteExternal final : public v8::String::ExternalStringResource {
- public:
-  TwoByteExternal(const char16_t* aChars, size_t aLength)
-      : mChars(reinterpret_cast<const uint16_t*>(aChars)), mLength(aLength) {}
-  const uint16_t* data() const override { return mChars; }
-  size_t length() const override { return mLength; }
-
- private:
-  const uint16_t* mChars;
-  size_t mLength;
-};
-
 JSString* NewExternalCell(JSContext* aCx, const void* aChars, size_t aLength,
                           bool aLatin1,
                           const JSExternalStringCallbacks* aCallbacks) {
   v8::HandleScope scope(aCx->isolate);
   v8::Local<v8::String> str;
+  CellOneByteResource* latin = nullptr;
+  CellTwoByteResource* twoByte = nullptr;
   if (aLatin1) {
-    auto* resource =
-        new LatinExternal(static_cast<const JS::Latin1Char*>(aChars), aLength);
-    if (!v8::String::NewExternalOneByte(aCx->isolate, resource)
-             .ToLocal(&str)) {
-      delete resource;
+    latin = new CellOneByteResource(nullptr, static_cast<const char*>(aChars),
+                                    aLength, false);
+    if (!v8::String::NewExternalOneByte(aCx->isolate, latin).ToLocal(&str)) {
+      latin->Release();
       return nullptr;
     }
   } else {
-    auto* resource =
-        new TwoByteExternal(static_cast<const char16_t*>(aChars), aLength);
-    if (!v8::String::NewExternalTwoByte(aCx->isolate, resource)
-             .ToLocal(&str)) {
-      delete resource;
+    twoByte = new CellTwoByteResource(
+        nullptr, static_cast<const uint16_t*>(aChars), aLength, false);
+    if (!v8::String::NewExternalTwoByte(aCx->isolate, twoByte).ToLocal(&str)) {
+      twoByte->Release();
       return nullptr;
     }
   }
   StringCell* cell = static_cast<StringCell*>(AllocCell(sizeof(StringCell)));
+  if (latin) {
+    latin->SetCell(cell);
+  }
+  if (twoByte) {
+    twoByte->SetCell(cell);
+  }
   uintptr_t flags = JS::shadow::String::EXTERNAL_FLAGS;
   if (aLatin1) {
     flags |= JS::shadow::String::LATIN1_CHARS_BIT;

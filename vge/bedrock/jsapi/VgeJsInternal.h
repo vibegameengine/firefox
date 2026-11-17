@@ -49,8 +49,10 @@ struct CellTail {
   bool isAtom;
   bool classFinalized;
   bool managed;
-  bool marked;
+  uint8_t marked;
+  bool wrapperKey;
   uint32_t serial;
+  std::atomic<uint32_t> charRefs;
   v8::Global<v8::Value> handle;
   Anchor* anchor;
   CellTail* nextFree;
@@ -89,6 +91,50 @@ struct StringCell {
     return flags & JS::shadow::String::LATIN1_CHARS_BIT;
   }
 };
+
+template <typename Base, typename Char>
+class CellStringResource final : public Base {
+ public:
+  CellStringResource(StringCell* aCell, const Char* aChars, size_t aLength,
+                     bool aCounted)
+      : mCell(aCell), mChars(aChars), mLength(aLength), mCounted(aCounted) {
+    if (aCounted) {
+      aCell->tail.charRefs.fetch_add(1, std::memory_order_relaxed);
+    }
+  }
+  const Char* data() const override { return mChars; }
+  size_t length() const override { return mLength; }
+  StringCell* Cell() const { return mCell; }
+  void SetCell(StringCell* aCell) { mCell = aCell; }
+  void Release() { Dispose(); }
+
+  static const void* Vtable() {
+    static CellStringResource probe(nullptr, nullptr, 0, false);
+    return *reinterpret_cast<const void* const*>(&probe);
+  }
+
+ protected:
+  void Dispose() override {
+    if (mCounted) {
+      mCell->tail.charRefs.fetch_sub(1, std::memory_order_release);
+    }
+    delete this;
+  }
+
+ private:
+  StringCell* mCell;
+  const Char* mChars;
+  size_t mLength;
+  bool mCounted;
+};
+
+using CellOneByteResource =
+    CellStringResource<v8::String::ExternalOneByteStringResource, char>;
+using CellTwoByteResource =
+    CellStringResource<v8::String::ExternalStringResource, uint16_t>;
+
+StringCell* CellOfV8String(v8::Isolate* aIsolate,
+                           v8::Local<v8::String> aString);
 
 struct SymbolCell {
   void* header;
@@ -149,8 +195,21 @@ void BindCellHandle(JSContext* aCx, CellTail* aTail, v8::Local<v8::Value> aValue
 void ForgetTail(CellTail* aTail);
 constexpr uint16_t kCellHandleClassId = 0x5643;
 void TraceAnchoredCell(ObjectCell* aCell, JSTracer* aTracer);
+namespace gc {
+bool IsVgeCell(const void* aPtr);
+}
+
+inline void MarkManagedCell(CellTail* aTail, uint8_t aSite) {
+  if (aTail && aTail->managed && !aTail->marked) {
+    aTail->marked = aSite;
+  }
+}
+void TraceCellSlots(ObjectCell* aCell, JSTracer* aTracer);
+void TraceCellHooks(ObjectCell* aCell, JSTracer* aTracer);
 void DetachManagedObjectCell(JSContext* aCx, ObjectCell* aCell);
 JSObject* PinCell(JSObject* aObj);
+ObjectCell* CellOfExternal(v8::Local<v8::Object> aObject,
+                           v8::Local<v8::Value> aExternal);
 void ForgetWrapperKey(JSContext* aCx, JSObject* aTarget);
 void NoteDeadAnchoredCell(CellTail* aTail);
 void MakeCellWeak(CellTail* aTail);

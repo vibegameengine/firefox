@@ -483,9 +483,8 @@ JSObject* BufferObjectFromV8(JSContext* aCx, v8::Local<v8::Object> aObject) {
           ->GetPrivate(AnyContext(aCx),
                        aCx->runtime->cellKey.Get(aCx->isolate))
           .ToLocal(&existing) &&
-      existing->IsExternal()) {
-    ObjectCell* cell =
-        static_cast<ObjectCell*>(existing.As<v8::External>()->Value(v8::kExternalPointerTypeTagDefault));
+      CellOfExternal(aObject, existing)) {
+    ObjectCell* cell = CellOfExternal(aObject, existing);
     if (clasp && !cell->shape->isProxy &&
         cell->shape->base.clasp == js::ObjectClassPtr) {
       cell->shape = ShapeFor(clasp, cell->shape->base.realm);
