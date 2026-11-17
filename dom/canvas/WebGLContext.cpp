@@ -1234,8 +1234,6 @@ void WebGLContext::Present(WebGLFramebuffer* const xrFb,
   const gl::MozFramebuffer* maybeFB = nullptr;
   if (xrFb) {
     maybeFB = xrFb->mOpaque.get();
-  } else {
-    mResolvedDefaultFB = nullptr;
   }
 
   bool useAsync = options.remoteTextureOwnerId.IsValid() &&
