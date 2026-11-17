@@ -58,10 +58,10 @@ class HeapGraph {
     v8::Isolate* isolate = mCx->isolate;
     v8::HandleScope scope(isolate);
     for (ObjectCell* cell : mCx->runtime->objectCells) {
-      if (cell->tail.handle.IsEmpty()) {
+      if (!CellHasV8(&cell->tail)) {
         continue;
       }
-      v8::Local<v8::Value> value = cell->tail.handle.Get(isolate);
+      v8::Local<v8::Value> value = CellV8(isolate, &cell->tail);
       JS::GCCellPtr thing(cell->asObject());
       v8::SnapshotObjectId id = mProfiler->GetObjectId(value);
       if (id != v8::HeapProfiler::kUnknownObjectId) {
@@ -211,8 +211,8 @@ class GrayRootTracer final : public JS::CallbackTracer {
       MarkManagedCell(TailOf(aThing.asCell(), aThing.kind()), 5);
     }
     CellTail* tail = LiveTail(aThing);
-    if (tail && !tail->handle.IsEmpty()) {
-      mMarker.Mark(tail->handle);
+    if (tail) {
+      MarkCellWith(mMarker, tail);
     }
     return true;
   }
@@ -608,6 +608,19 @@ class CellGrayMarkingClient final : public v8::GrayMarkingClient {
       }
       input.cells.push_back(
           {JS::GCCellPtr(cell->asObject()), handles[i].object, inner});
+    }
+    for (Anchor* anchor : mState.runtime->anchors) {
+      uintptr_t address = aResult.AddressOf(anchor->Wrapper());
+      if (!address) {
+        continue;
+      }
+      ObjectCell* cell = anchor->Cell();
+      uintptr_t inner = 0;
+      const JSClass* clasp = cell->shape ? cell->shape->base.clasp : nullptr;
+      if (clasp && (clasp->flags & JSCLASS_IS_GLOBAL)) {
+        inner = aResult.InnerGlobalOfProxy(address);
+      }
+      input.cells.push_back({JS::GCCellPtr(cell->asObject()), address, inner});
     }
     mozilla::TimeStamp snapped = mozilla::TimeStamp::Now();
     const size_t snappedCount = input.cells.size();

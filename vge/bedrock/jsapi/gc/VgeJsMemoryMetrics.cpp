@@ -163,7 +163,7 @@ size_t Measure(JSContext* aCx, const v8::HeapSnapshot* snapshot,
   }
   if (aOpv && !aRealms.empty()) {
     for (ObjectCell* cell : aCx->runtime->objectCells) {
-      if (cell->tail.handle.IsEmpty()) {
+      if (!CellHasV8(&cell->tail)) {
         continue;
       }
       nsISupports* iface = nullptr;
@@ -171,7 +171,7 @@ size_t Measure(JSContext* aCx, const v8::HeapSnapshot* snapshot,
         continue;
       }
       v8::HandleScope inner(isolate);
-      v8::Local<v8::Value> handle = cell->tail.handle.Get(isolate);
+      v8::Local<v8::Value> handle = CellV8(isolate, &cell->tail);
       const v8::HeapGraphNode* node =
           snapshot->GetNodeById(profiler->GetObjectId(handle));
       int32_t n = node ? index.Find(node) : -1;

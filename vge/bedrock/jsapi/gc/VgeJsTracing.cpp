@@ -206,7 +206,7 @@ CellTail* LiveTail(JS::GCCellPtr aThing) {
       return tail;
     }
   }
-  if (tail->handle.IsEmpty()) {
+  if (!CellHasV8(tail)) {
     return nullptr;
   }
   return tail;
@@ -217,7 +217,7 @@ v8::Local<v8::Value> HandleOf(v8::Isolate* aIsolate, JS::GCCellPtr aThing) {
   if (!tail) {
     return v8::Local<v8::Value>();
   }
-  return tail->handle.Get(aIsolate);
+  return CellV8(aIsolate, tail);
 }
 
 JS::GCCellPtr CellForV8Value(JSContext* aCx, v8::Local<v8::Value> aValue) {

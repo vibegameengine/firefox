@@ -34,11 +34,15 @@ class RootMarker final : public JS::CallbackTracer {
   bool onChild(JS::GCCellPtr aThing, const char* aName) override {
     CellTail* tail = TailOf(aThing.asCell(), aThing.kind());
     MarkManagedCell(tail, 1);
-    if (!tail || tail->rootedThisGC || tail->handle.IsEmpty()) {
+    if (!tail || tail->rootedThisGC || !CellHasV8(tail)) {
       return true;
     }
     tail->rootedThisGC = true;
-    tail->handle.ClearWeak();
+    if (tail->anchor) {
+      runtime()->rootedAnchors.emplace_back(tail->anchor);
+    } else {
+      tail->handle.ClearWeak();
+    }
     runtime()->strongThisGC.push_back(tail);
     return true;
   }
@@ -126,10 +130,10 @@ void SweepPhantomCells(JSRuntime* aRuntime) {
   if (sCensus) {
     size_t anchored = 0, plainWeak = 0, plainStrong = 0, empty = 0;
     for (ObjectCell* cell : aRuntime->objectCells) {
-      if (cell->tail.handle.IsEmpty()) {
-        empty++;
-      } else if (cell->tail.anchor) {
+      if (cell->tail.anchor) {
         anchored++;
+      } else if (cell->tail.handle.IsEmpty()) {
+        empty++;
       } else if (cell->tail.handle.IsWeak()) {
         plainWeak++;
       } else {
@@ -157,14 +161,10 @@ void CollectResetCells(JSRuntime* aRuntime) {
   for (uintptr_t global : globals) {
     CellTail* tail =
         reinterpret_cast<CellTail*>(global - offsetof(CellTail, handle));
-    if (tail->managed) {
+    if (tail->managed || tail->anchor) {
       continue;
     }
-    if (tail->anchor) {
-      NoteDeadAnchoredCell(tail);
-    } else {
-      aRuntime->deadTails.push_back(tail);
-    }
+    aRuntime->deadTails.push_back(tail);
   }
 }
 
@@ -453,6 +453,7 @@ void GCEpilogue(v8::Isolate* aIsolate, v8::GCType aType,
     }
   }
   rt->strongThisGC.clear();
+  rt->rootedAnchors.clear();
   rt->inGC = false;
   if (rt->mainContext) {
     JS::GCContext* gcx = reinterpret_cast<JS::GCContext*>(rt);
@@ -512,9 +513,38 @@ void WatchRealmContext(JS::Realm* aRealm) {
                           v8::WeakCallbackType::kParameter);
 }
 
+void RegisterAnchor(JSRuntime* aRuntime, Anchor* aAnchor) {
+  aAnchor->SetIndex(uint32_t(aRuntime->anchors.size()));
+  aRuntime->anchors.push_back(aAnchor);
+}
+
+void UnregisterAnchor(JSRuntime* aRuntime, Anchor* aAnchor) {
+  uint32_t index = aAnchor->Index();
+  if (!aRuntime || index == Anchor::kNoIndex) {
+    return;
+  }
+  Anchor* last = aRuntime->anchors.back();
+  aRuntime->anchors[index] = last;
+  last->SetIndex(index);
+  aRuntime->anchors.pop_back();
+  aAnchor->SetIndex(Anchor::kNoIndex);
+}
+
+void Anchor::PreFinalize() {
+  JSRuntime* rt = Runtime();
+  UnregisterAnchor(rt, this);
+  if (mCell->tail.anchor == this) {
+    mCell->tail.anchor = nullptr;
+    if (rt) {
+      rt->deadAnchored.push_back(mCell);
+    }
+  }
+}
+
 Anchor::~Anchor() {
   ObjectCell* cell = mCell;
   JSRuntime* rt = Runtime();
+  UnregisterAnchor(rt, this);
   if (rt && rt->inGC) {
     cell->tail.anchor = nullptr;
     cell->tail.handle.Reset();
@@ -534,8 +564,8 @@ class GrayWrapperSlotTracer final : public JS::CallbackTracer {
   bool onChild(JS::GCCellPtr aThing, const char* aName) override {
     CellTail* tail = TailOf(aThing.asCell(), aThing.kind());
     MarkManagedCell(tail, 2);
-    if (tail && !tail->handle.IsEmpty()) {
-      mMarker.Mark(tail->handle);
+    if (tail) {
+      MarkCellWith(mMarker, tail);
     }
     return true;
   }

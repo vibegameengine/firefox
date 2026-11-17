@@ -28,6 +28,8 @@
 #include "mozilla/LinkedList.h"
 #include "cppgc/allocation.h"
 #include "cppgc/garbage-collected.h"
+#include "cppgc/persistent.h"
+#include "cppgc/prefinalizer.h"
 #include "cppgc/visitor.h"
 #include "v8-cppgc.h"
 #include "v8-gray-marking.h"
@@ -245,6 +247,8 @@ bool IdFromV8(JSContext* aCx, v8::Local<v8::Value> aKey,
 v8::Local<v8::Value> ToV8(JSContext* aCx, jsid aId);
 
 class Anchor final : public v8::Object::Wrappable {
+  CPPGC_USING_PRE_FINALIZER(Anchor, PreFinalize);
+
  public:
   explicit Anchor(ObjectCell* aCell) : mCell(aCell) {}
   ~Anchor();
@@ -253,11 +257,60 @@ class Anchor final : public v8::Object::Wrappable {
   ObjectCell* Cell() const { return mCell; }
   void TraceSlotValue(cppgc::Visitor* aVisitor, const JS::Value& aValue) const;
   void SetWrapper(v8::Isolate* aIsolate, v8::Local<v8::Object> aWrapper);
+  const v8::TracedReference<v8::Object>& Wrapper() const { return mWrapper; }
+  uint32_t Index() const { return mIndex; }
+  void SetIndex(uint32_t aIndex) { mIndex = aIndex; }
+
+  static constexpr uint32_t kNoIndex = UINT32_MAX;
 
  private:
+  void PreFinalize();
+
   ObjectCell* mCell;
+  uint32_t mIndex = kNoIndex;
   v8::TracedReference<v8::Object> mWrapper;
 };
+
+void RegisterAnchor(JSRuntime* aRuntime, Anchor* aAnchor);
+void UnregisterAnchor(JSRuntime* aRuntime, Anchor* aAnchor);
+
+inline bool CellHasV8(const CellTail* aTail) {
+  return aTail->anchor ? !aTail->anchor->Wrapper().IsEmpty()
+                       : !aTail->handle.IsEmpty();
+}
+
+inline v8::Local<v8::Value> CellV8(v8::Isolate* aIsolate,
+                                   const CellTail* aTail) {
+  if (aTail->anchor) {
+    return aTail->anchor->Wrapper().Get(aIsolate);
+  }
+  return aTail->handle.Get(aIsolate);
+}
+
+inline bool CellIs(const CellTail* aTail, v8::Local<v8::Object> aObject) {
+  if (aTail->anchor) {
+    return aTail->anchor->Wrapper() == aObject;
+  }
+  return aTail->handle == aObject;
+}
+
+inline void MarkCellDuringMarking(v8::Isolate* aIsolate,
+                                  const CellTail* aTail) {
+  if (aTail->anchor) {
+    v8::MarkTracedDuringMarking(aIsolate, aTail->anchor->Wrapper());
+  } else if (!aTail->handle.IsEmpty()) {
+    v8::MarkGlobalDuringMarking(aIsolate, aTail->handle);
+  }
+}
+
+template <typename Marker>
+inline void MarkCellWith(Marker& aMarker, const CellTail* aTail) {
+  if (aTail->anchor) {
+    aMarker.Mark(aTail->anchor->Wrapper());
+  } else if (!aTail->handle.IsEmpty()) {
+    aMarker.Mark(aTail->handle);
+  }
+}
 
 constexpr v8::CppHeapPointerTag kAnchorTag =
     v8::CppHeapPointerTag::kFirstEmbedderWrappableTag;
@@ -312,6 +365,8 @@ struct JSRuntime {
   std::vector<std::pair<vge::jsapi::ObjectCell*, JS::Value*>> deferredObjectFrees;
   std::vector<vge::jsapi::ObjectCell*> pendingFinalize;
   std::vector<vge::jsapi::ObjectCell*> deadAnchored;
+  std::vector<vge::jsapi::Anchor*> anchors;
+  std::vector<cppgc::Persistent<vge::jsapi::Anchor>> rootedAnchors;
   void (*weakPointerSweep)(JSRuntime*) = nullptr;
   bool sweepingWeakPointers = false;
   std::unordered_map<const JSClass*, std::vector<vge::jsapi::Shape*>> shapes;

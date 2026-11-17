@@ -465,10 +465,10 @@ void SlotWriteBarrier(JSContext* aCx, const JS::Value& aValue) {
   CellTail* tail = TailOf(reinterpret_cast<js::gc::Cell*>(aValue.toGCThing()),
                           aValue.traceKind());
   MarkManagedCell(tail, 3);
-  if (!tail || tail->handle.IsEmpty()) {
+  if (!tail) {
     return;
   }
-  v8::MarkGlobalDuringMarking(aCx->isolate, tail->handle);
+  MarkCellDuringMarking(aCx->isolate, tail);
 }
 
 JS::Value* SlotAddress(JSObject* aObj, uint32_t aIndex) {
@@ -617,15 +617,18 @@ v8::Local<v8::ObjectTemplate> HolderTemplate(JSContext* aCx) {
 void AnchorCellOn(JSContext* aCx, ObjectCell* aCell,
                   v8::Local<v8::Object> aHolder) {
   aCell->tail.managed = false;
+  v8::Local<v8::Object> object =
+      CellV8(aCx->isolate, &aCell->tail).As<v8::Object>();
   if (!aCell->tail.anchor) {
-    aCell->tail.anchor = cppgc::MakeGarbageCollected<Anchor>(
+    Anchor* anchor = cppgc::MakeGarbageCollected<Anchor>(
         aCx->isolate->GetCppHeap()->GetAllocationHandle(), aCell);
-    if (!aCell->tail.handle.IsEmpty() && aCell->tail.handle.IsWeak()) {
-      MakeCellWeak(&aCell->tail);
-    }
+    aCell->tail.anchor = anchor;
+    RegisterAnchor(aCx->runtime, anchor);
+    aCell->tail.handle.Reset();
+    ForgetTail(&aCell->tail);
   }
   v8::Object::Wrap(aCx->isolate, aHolder, aCell->tail.anchor, kAnchorTag);
-  aCell->tail.anchor->SetWrapper(aCx->isolate, aHolder);
+  aCell->tail.anchor->SetWrapper(aCx->isolate, object);
 }
 
 void InvokeNative(JSContext* aCx, JSNative aNative, JS::Realm* aRealm,

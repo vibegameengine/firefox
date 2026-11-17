@@ -680,7 +680,7 @@ JSObject* JS_NewGlobalObject(JSContext* aCx, const JSClass* aClass,
                                      v8::kExternalPointerTypeTagDefault))
       .Check();
   v8::Object::WrapGlobal(isolate, proxy, cell->tail.anchor, kAnchorTag);
-  cell->tail.anchor->SetWrapper(isolate, inner);
+  cell->tail.anchor->SetWrapper(isolate, proxy);
   realm->global = cell->asObject();
   realm->globalClass = aClass;
   RealmExtra& extra = RealmData(realm);

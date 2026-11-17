@@ -329,7 +329,7 @@ void MarkingBarrier(JS::GCCellPtr aThing) {
   if (!state->v8Marking) {
     return;
   }
-  v8::MarkGlobalDuringMarking(cx->isolate, tail->handle);
+  MarkCellDuringMarking(cx->isolate, tail);
 }
 
 }

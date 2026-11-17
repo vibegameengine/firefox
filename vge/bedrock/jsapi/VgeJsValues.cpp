@@ -142,8 +142,10 @@ ObjectCell* NewObjectCell(JSContext* aCx, Shape* aShape,
     Anchor* anchor = cppgc::MakeGarbageCollected<Anchor>(
         aCx->isolate->GetCppHeap()->GetAllocationHandle(), cell);
     cell->tail.anchor = anchor;
+    RegisterAnchor(aCx->runtime, anchor);
     v8::Object::Wrap(aCx->isolate, aObject, anchor, kAnchorTag);
     anchor->SetWrapper(aCx->isolate, aObject);
+    return cell;
   }
   BindCellHandle(aCx, &cell->tail, aObject, false);
   return cell;
@@ -185,17 +187,17 @@ ObjectCell* CellOfExternal(v8::Local<v8::Object> aObject,
   }
   ObjectCell* cell = static_cast<ObjectCell*>(
       aExternal.As<v8::External>()->Value(v8::kExternalPointerTypeTagDefault));
-  if (cell->tail.handle.IsEmpty()) {
+  if (!CellHasV8(&cell->tail)) {
     return nullptr;
   }
-  if (cell->tail.handle == aObject) {
+  if (CellIs(&cell->tail, aObject)) {
     return cell;
   }
   const JSClass* clasp = cell->shape ? cell->shape->base.clasp : nullptr;
   if (clasp && (clasp->flags & JSCLASS_IS_GLOBAL)) {
     v8::Isolate* isolate = v8::Isolate::GetCurrent();
     v8::Local<v8::Value> inner =
-        v8::InnerGlobalOfProxy(isolate, cell->tail.handle.Get(isolate));
+        v8::InnerGlobalOfProxy(isolate, CellV8(isolate, &cell->tail));
     if (!inner.IsEmpty() && inner == aObject) {
       return cell;
     }
@@ -219,7 +221,7 @@ v8::Local<v8::Object> ToV8(JSContext* aCx, JSObject* aObj) {
     return v8::Local<v8::Object>();
   }
   ObjectCell* cell = ObjectCell::from(aObj);
-  return cell->tail.handle.Get(aCx->isolate).As<v8::Object>();
+  return CellV8(aCx->isolate, &cell->tail).As<v8::Object>();
 }
 
 StringCell* CellOfV8String(v8::Isolate* aIsolate,

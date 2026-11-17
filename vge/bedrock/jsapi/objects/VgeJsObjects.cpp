@@ -459,13 +459,10 @@ void MarkForBarrier(const JS::Value& aValue) {
   }
   JS::GCCellPtr thing = aValue.toGCCellPtr();
   CellTail* tail = TailOf(thing.asCell(), thing.kind());
-  if (!tail || tail->handle.IsEmpty()) {
+  if (!tail) {
     return;
   }
-  v8::HandleScope scope(rt->isolate);
-  v8::TracedReference<v8::Value> barrier;
-  barrier.Reset(rt->isolate, tail->handle.Get(rt->isolate));
-  barrier.Reset();
+  MarkCellDuringMarking(rt->isolate, tail);
 }
 
 }
