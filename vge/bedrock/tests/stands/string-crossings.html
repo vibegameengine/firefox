@@ -1,0 +1,25 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>string crossings</title>
+<div id="box"></div>
+<script>
+const box = document.getElementById("box");
+const names = ["data-a", "data-b", "data-c", "data-d"];
+const values = ["alpha", "beta", "gamma", "delta"];
+let frame = 0;
+let mismatches = 0;
+function tick() {
+  frame++;
+  for (let i = 0; i < 2000; i++) {
+    const n = names[i & 3];
+    const v = values[(i >> 2) & 3];
+    box.setAttribute(n, v);
+    if (box.getAttribute(n) !== v) mismatches++;
+    box.style.setProperty("--k" + (i & 7), v);
+    box.dataset.last = v;
+  }
+  if (frame % 120 === 0) console.log("string-crossings frame " + frame + " mismatches " + mismatches);
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+</script>

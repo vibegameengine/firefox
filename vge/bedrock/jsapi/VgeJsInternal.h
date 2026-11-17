@@ -48,6 +48,8 @@ struct CellTail {
   bool rootedThisGC;
   bool isAtom;
   bool classFinalized;
+  bool managed;
+  bool marked;
   uint32_t serial;
   v8::Global<v8::Value> handle;
   Anchor* anchor;
@@ -238,6 +240,7 @@ struct JSRuntime {
   std::vector<vge::jsapi::CellTail*> strongThisGC;
   std::unordered_set<vge::jsapi::CellTail*> youngTails;
   std::vector<vge::jsapi::CellTail*> deadTails;
+  std::vector<vge::jsapi::StringCell*> managedStrings;
   bool phantomSweepPosted = false;
   std::vector<JS::Realm*> realms;
   std::vector<JS::Realm*> dyingRealms;

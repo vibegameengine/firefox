@@ -59,14 +59,87 @@ void FreeDeadCell(CellTail* aTail) {
   FreeCell(cell, sizeof(StringCell));
 }
 
+class ManagedStringMarker final : public JS::CallbackTracer {
+ public:
+  explicit ManagedStringMarker(JSRuntime* aRuntime)
+      : JS::CallbackTracer(aRuntime, JS::TracerKind::Callback,
+                           JS::WeakMapTraceAction::TraceKeysAndValues) {}
+
+  bool onChild(JS::GCCellPtr aThing, const char* aName) override {
+    if (!aThing.is<JSString>()) {
+      return true;
+    }
+    CellTail* tail = TailOf(aThing.asCell(), aThing.kind());
+    if (tail && tail->managed) {
+      tail->marked = true;
+    }
+    return true;
+  }
+};
+
+void TraceAllRoots(JSRuntime* aRuntime, JSTracer* aTracer);
+void FreeDeadCell(CellTail* aTail);
+
+void SweepManagedStrings(JSRuntime* aRuntime) {
+  if (aRuntime->managedStrings.empty()) {
+    return;
+  }
+  ManagedStringMarker marker(aRuntime);
+  TraceAllRoots(aRuntime, &marker);
+  if (aRuntime->grayRootTracer) {
+    JS::SliceBudget budget = JS::SliceBudget::unlimited();
+    aRuntime->grayRootTracer(&marker, budget, aRuntime->grayRootTracerData);
+  }
+  for (ObjectCell* cell : aRuntime->objectCells) {
+    TraceAnchoredCell(cell, &marker);
+  }
+  std::vector<StringCell*>& cells = aRuntime->managedStrings;
+  size_t kept = 0;
+  for (StringCell* cell : cells) {
+    if (cell->tail.marked) {
+      cell->tail.marked = false;
+      cells[kept++] = cell;
+    } else {
+      FreeDeadCell(&cell->tail);
+    }
+  }
+  cells.resize(kept);
+}
+
 void SweepPhantomCells(JSRuntime* aRuntime) {
   aRuntime->phantomSweepPosted = false;
+  SweepManagedStrings(aRuntime);
   std::vector<CellTail*> dead;
   dead.swap(aRuntime->deadTails);
   for (CellTail* tail : dead) {
     FreeDeadCell(tail);
   }
   DrainDeferredObjectFrees(aRuntime, SIZE_MAX);
+  static const bool sCensus = !!getenv("VGE_GC_LOG");
+  if (sCensus) {
+    size_t anchored = 0, plainWeak = 0, plainStrong = 0, empty = 0;
+    for (ObjectCell* cell : aRuntime->objectCells) {
+      if (cell->tail.handle.IsEmpty()) {
+        empty++;
+      } else if (cell->tail.anchor) {
+        anchored++;
+      } else if (cell->tail.handle.IsWeak()) {
+        plainWeak++;
+      } else {
+        plainStrong++;
+      }
+    }
+    v8::HeapStatistics stats;
+    aRuntime->isolate->GetHeapStatistics(&stats);
+    fprintf(stderr,
+            "VGECENSUS objects %zu anchored %zu plain_weak %zu plain_strong %zu "
+            "empty %zu strings %lld atoms %zu symbols %zu global_handles %zu\n",
+            aRuntime->objectCells.size(), anchored, plainWeak, plainStrong,
+            empty, static_cast<long long>(gLiveStringCells.load()),
+            aRuntime->atoms.size(), aRuntime->symbols.size(),
+            stats.used_global_handles_size() / 32);
+    fflush(stderr);
+  }
 }
 
 void CollectResetCells(JSRuntime* aRuntime) {
@@ -75,6 +148,9 @@ void CollectResetCells(JSRuntime* aRuntime) {
   for (uintptr_t global : globals) {
     CellTail* tail =
         reinterpret_cast<CellTail*>(global - offsetof(CellTail, handle));
+    if (tail->managed) {
+      continue;
+    }
     if (tail->anchor) {
       NoteDeadAnchoredCell(tail);
     } else {
@@ -93,7 +169,8 @@ class PhantomSweepTask final : public v8::Task {
 };
 
 void SchedulePhantomSweep(JSRuntime* aRuntime) {
-  if (aRuntime->phantomSweepPosted || aRuntime->deadTails.empty()) {
+  if (aRuntime->phantomSweepPosted ||
+      (aRuntime->deadTails.empty() && aRuntime->managedStrings.empty())) {
     return;
   }
   aRuntime->phantomSweepPosted = true;

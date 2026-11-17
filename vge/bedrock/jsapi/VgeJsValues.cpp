@@ -184,6 +184,8 @@ v8::Local<v8::Object> ToV8(JSContext* aCx, JSObject* aObj) {
 
 JSString* StringFromV8(JSContext* aCx, v8::Local<v8::String> aString) {
   StringCell* cell = FillString(aCx, aString, false);
+  cell->tail.managed = true;
+  aCx->runtime->managedStrings.push_back(cell);
   BindCellHandle(aCx, &cell->tail, aString, false);
   return cell->asString();
 }

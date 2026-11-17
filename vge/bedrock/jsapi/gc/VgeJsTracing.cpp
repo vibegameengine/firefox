@@ -194,7 +194,13 @@ CellTail* LiveTail(JS::GCCellPtr aThing) {
     return nullptr;
   }
   CellTail* tail = TailOf(aThing.asCell(), aThing.kind());
-  if (!tail || tail->handle.IsEmpty()) {
+  if (!tail) {
+    return nullptr;
+  }
+  if (tail->managed) {
+    return tail;
+  }
+  if (tail->handle.IsEmpty()) {
     return nullptr;
   }
   return tail;
