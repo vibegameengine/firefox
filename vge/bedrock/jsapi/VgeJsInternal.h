@@ -2,6 +2,7 @@
 #define vge_bedrock_jsapi_VgeJsInternal_h
 
 #include <atomic>
+#include <mutex>
 #include <stdint.h>
 
 #include <string>
@@ -294,6 +295,9 @@ class Anchor final : public v8::Object::Wrappable {
 };
 
 void RegisterAnchor(JSRuntime* aRuntime, Anchor* aAnchor);
+void TakeGrayAnchors(std::vector<Anchor*>* aOut);
+void ClearGrayAnchors();
+extern size_t gBarrierMarksInGC[3];
 void UnregisterAnchor(JSRuntime* aRuntime, Anchor* aAnchor);
 
 inline bool CellHasV8(const CellTail* aTail) {

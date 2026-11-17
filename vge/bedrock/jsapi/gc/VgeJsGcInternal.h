@@ -52,6 +52,8 @@ struct GrayResult {
   std::vector<std::pair<JSObject*, JSObject*>> weakRefTargets;
   std::unordered_map<js::gc::Cell*, std::vector<JS::GCCellPtr>> jsEdges;
   double buildMs = 0;
+  size_t reblackSeeds = 0;
+  size_t reblacked = 0;
 };
 
 struct CodeRange {

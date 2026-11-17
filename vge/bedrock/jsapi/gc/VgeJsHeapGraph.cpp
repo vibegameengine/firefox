@@ -287,6 +287,7 @@ struct GrayInput {
   std::vector<v8::GrayMarkingEphemeron> ephemerons;
   std::vector<v8::GrayMarkingWeakRef> weakRefs;
   std::vector<CellSnapshot> cells;
+  std::vector<uintptr_t> reblackSeeds;
 };
 
 JSObject* ObjectOf(const CellSnapshot& aCell) {
@@ -334,6 +335,97 @@ std::unordered_map<js::gc::Cell*, std::vector<JS::GCCellPtr>> ExpandCellEdges(
   return result;
 }
 
+std::vector<uint8_t> ReblackFromSeeds(const AddressIndex& aGray,
+                                      uint32_t aNodeCount,
+                                      const GrayInput& aIn) {
+  constexpr uint32_t kNone = AddressIndex::kNone;
+  std::vector<uint32_t> offsets(aNodeCount + 1, 0);
+  for (const std::vector<v8::GrayMarkingEdge>& chunk : aIn.edgeChunks) {
+    for (const v8::GrayMarkingEdge& edge : chunk) {
+      uint32_t from = aGray.Find(edge.from);
+      if (from != kNone && aGray.Find(edge.to) != kNone) {
+        offsets[from + 1]++;
+      }
+    }
+  }
+  for (uint32_t i = 0; i < aNodeCount; i++) {
+    offsets[i + 1] += offsets[i];
+  }
+  std::vector<uint32_t> targets(offsets[aNodeCount]);
+  std::vector<uint32_t> fill(offsets.begin(), offsets.end() - 1);
+  for (const std::vector<v8::GrayMarkingEdge>& chunk : aIn.edgeChunks) {
+    for (const v8::GrayMarkingEdge& edge : chunk) {
+      uint32_t from = aGray.Find(edge.from);
+      if (from == kNone) {
+        continue;
+      }
+      uint32_t to = aGray.Find(edge.to);
+      if (to != kNone) {
+        targets[fill[from]++] = to;
+      }
+    }
+  }
+
+  struct Ephemeron {
+    uint32_t table;
+    uint32_t key;
+    uint32_t value;
+  };
+  std::vector<Ephemeron> ephemerons;
+  std::unordered_multimap<uint32_t, uint32_t> byKey;
+  std::unordered_multimap<uint32_t, uint32_t> byTable;
+  for (const v8::GrayMarkingEphemeron& entry : aIn.ephemerons) {
+    uint32_t value = aGray.Find(entry.value);
+    if (value == kNone) {
+      continue;
+    }
+    uint32_t index = uint32_t(ephemerons.size());
+    Ephemeron ephemeron{aGray.Find(entry.table), aGray.Find(entry.key), value};
+    ephemerons.push_back(ephemeron);
+    if (ephemeron.key != kNone) {
+      byKey.emplace(ephemeron.key, index);
+    }
+    if (ephemeron.table != kNone) {
+      byTable.emplace(ephemeron.table, index);
+    }
+  }
+
+  std::vector<uint8_t> black(aNodeCount, 0);
+  std::vector<uint32_t> stack;
+  auto isBlack = [&](uint32_t aNode) { return aNode == kNone || black[aNode]; };
+  auto paint = [&](uint32_t aNode) {
+    if (aNode != kNone && !black[aNode]) {
+      black[aNode] = 1;
+      stack.push_back(aNode);
+    }
+  };
+  for (uintptr_t seed : aIn.reblackSeeds) {
+    paint(aGray.Find(seed));
+  }
+  while (!stack.empty()) {
+    uint32_t node = stack.back();
+    stack.pop_back();
+    for (uint32_t e = offsets[node]; e < offsets[node + 1]; e++) {
+      paint(targets[e]);
+    }
+    auto keyed = byKey.equal_range(node);
+    for (auto it = keyed.first; it != keyed.second; ++it) {
+      const Ephemeron& ephemeron = ephemerons[it->second];
+      if (isBlack(ephemeron.table)) {
+        paint(ephemeron.value);
+      }
+    }
+    auto tabled = byTable.equal_range(node);
+    for (auto it = tabled.first; it != tabled.second; ++it) {
+      const Ephemeron& ephemeron = ephemerons[it->second];
+      if (isBlack(ephemeron.key)) {
+        paint(ephemeron.value);
+      }
+    }
+  }
+  return black;
+}
+
 GrayResult BuildGrayResult(GrayInput&& aIn) {
   mozilla::TimeStamp start = mozilla::TimeStamp::Now();
   GrayResult out;
@@ -355,6 +447,23 @@ GrayResult BuildGrayResult(GrayInput&& aIn) {
         nodeCount++;
       }
     }
+  }
+  out.reblackSeeds = aIn.reblackSeeds.size();
+  if (!aIn.reblackSeeds.empty()) {
+    std::vector<uint8_t> reblacked = ReblackFromSeeds(gray, nodeCount, aIn);
+    AddressIndex kept(recorded);
+    uint32_t keptCount = 0;
+    for (const std::vector<uintptr_t>& chunk : aIn.objectChunks) {
+      for (uintptr_t address : chunk) {
+        uint32_t n = gray.Find(address);
+        if (n != kNone && !reblacked[n] && kept.Insert(address, keptCount)) {
+          keptCount++;
+        }
+      }
+    }
+    out.reblacked = nodeCount - keptCount;
+    gray = std::move(kept);
+    nodeCount = keptCount;
   }
   aIn.objectChunks = {};
 
@@ -533,10 +642,10 @@ void EnsureGrayBits(GcState& aState) {
     mozilla::TimeStamp end = mozilla::TimeStamp::Now();
     fprintf(stderr,
             "VGEGRAYAPPLY build %.3f wait %.3f apply %.3f ready %d gray %zu "
-            "exposed %zu unmarked %zu\n",
+            "exposed %zu unmarked %zu reblack_seeds %zu reblacked %zu\n",
             result.buildMs, (got - start).ToMilliseconds(),
             (end - got).ToMilliseconds(), ready, result.gray.size(),
-            exposed.size(), unmarked);
+            exposed.size(), unmarked, result.reblackSeeds, result.reblacked);
     fflush(stderr);
   }
 }
@@ -589,6 +698,8 @@ class CellGrayMarkingClient final : public v8::GrayMarkingClient {
     const size_t ephemeronCount = count;
     const v8::GrayMarkingWeakRef* refs = aResult.WeakRefs(&count);
     input.weakRefs.assign(refs, refs + count);
+    const uintptr_t* seeds = aResult.ReblackSeeds(&count);
+    input.reblackSeeds.assign(seeds, seeds + count);
     mozilla::TimeStamp copied = mozilla::TimeStamp::Now();
     size_t handleCount = 0;
     const v8::GrayMarkingHandle* handles = aResult.GrayHandles(&handleCount);
@@ -609,7 +720,9 @@ class CellGrayMarkingClient final : public v8::GrayMarkingClient {
       input.cells.push_back(
           {JS::GCCellPtr(cell->asObject()), handles[i].object, inner});
     }
-    for (Anchor* anchor : mState.runtime->anchors) {
+    std::vector<Anchor*> grayAnchors;
+    TakeGrayAnchors(&grayAnchors);
+    for (Anchor* anchor : grayAnchors) {
       uintptr_t address = aResult.AddressOf(anchor->Wrapper());
       if (!address) {
         continue;

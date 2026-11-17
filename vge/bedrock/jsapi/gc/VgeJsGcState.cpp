@@ -329,6 +329,9 @@ void MarkingBarrier(JS::GCCellPtr aThing) {
   if (!state->v8Marking) {
     return;
   }
+  if (cx->runtime->inGC) {
+    gBarrierMarksInGC[0]++;
+  }
   MarkCellDuringMarking(cx->isolate, tail);
 }
 

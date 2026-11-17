@@ -71,6 +71,7 @@ void FreeDeadCell(CellTail* aTail) {
 void ReleaseUnmarkedManagedCells(JSRuntime* aRuntime) {
   size_t objectSites[8] = {};
   size_t stringSites[8] = {};
+  size_t externalStrings = 0;
   std::vector<ObjectCell*>& objects = aRuntime->managedObjects;
   size_t keptObjects = 0;
   for (ObjectCell* cell : objects) {
@@ -99,6 +100,9 @@ void ReleaseUnmarkedManagedCells(JSRuntime* aRuntime) {
       continue;
     }
     stringSites[cell->tail.marked & 7]++;
+    if (cell->tail.charRefs.load(std::memory_order_relaxed)) {
+      externalStrings++;
+    }
     if (cell->tail.marked) {
       cell->tail.marked = 0;
       cells[kept++] = cell;
@@ -117,12 +121,13 @@ void ReleaseUnmarkedManagedCells(JSRuntime* aRuntime) {
     fprintf(stderr,
             "VGEMANAGED inGC %d objects free %zu root %zu wrap %zu slotw %zu "
             "heapw %zu gray %zu proxy %zu new %zu strings free %zu root %zu "
-            "wrap %zu slotw %zu heapw %zu gray %zu proxy %zu new %zu\n",
+            "wrap %zu slotw %zu heapw %zu gray %zu proxy %zu new %zu "
+            "external %zu total %zu\n",
             aRuntime->inGC, objectSites[0], objectSites[1], objectSites[2],
             objectSites[3], objectSites[4], objectSites[5], objectSites[6],
             objectSites[7], stringSites[0], stringSites[1], stringSites[2],
             stringSites[3], stringSites[4], stringSites[5], stringSites[6],
-            stringSites[7]);
+            stringSites[7], externalStrings, cells.size());
     fflush(stderr);
   }
 }
@@ -407,6 +412,12 @@ void SweepDyingRealms(JSRuntime* aRuntime) {
   }
 }
 
+size_t GlobalHandleCount(v8::Isolate* aIsolate) {
+  v8::HeapStatistics stats;
+  aIsolate->GetHeapStatistics(&stats);
+  return stats.used_global_handles_size() / 32;
+}
+
 void GCPrologue(v8::Isolate* aIsolate, v8::GCType aType,
                 v8::GCCallbackFlags aFlags, void* aData) {
   JSRuntime* rt = static_cast<JSRuntime*>(aData);
@@ -415,10 +426,19 @@ void GCPrologue(v8::Isolate* aIsolate, v8::GCType aType,
     HoldYoungCells(rt);
     return;
   }
+  static const bool sLog = !!getenv("VGE_GC_LOG");
+  const size_t strongBefore = rt->strongThisGC.size();
+  const size_t anchorsBefore = rt->rootedAnchors.size();
   if (aType & v8::kGCTypeIncrementalMarking) {
     RootMarker marker(rt);
     TraceAllRoots(rt, &marker);
     TraceBlackGlobals(rt, &marker);
+    if (sLog) {
+      fprintf(stderr, "VGEPROLOGUE start strong +%zu anchors +%zu globals %zu\n",
+              rt->strongThisGC.size() - strongBefore,
+              rt->rootedAnchors.size() - anchorsBefore,
+              GlobalHandleCount(aIsolate));
+    }
     return;
   }
   if (!(aType & v8::kGCTypeMarkSweepCompact) || rt->inGC) {
@@ -433,6 +453,15 @@ void GCPrologue(v8::Isolate* aIsolate, v8::GCType aType,
   RootMarker marker(rt);
   TraceAllRoots(rt, &marker);
   TraceBlackGlobals(rt, &marker);
+  if (sLog) {
+    fprintf(stderr,
+            "VGEPROLOGUE final strong +%zu anchors +%zu total %zu/%zu "
+            "scope_handles %d in_context %d globals %zu\n",
+            rt->strongThisGC.size() - strongBefore,
+            rt->rootedAnchors.size() - anchorsBefore, rt->strongThisGC.size(),
+            rt->rootedAnchors.size(), v8::HandleScope::NumberOfHandles(aIsolate),
+            aIsolate->InContext(), GlobalHandleCount(aIsolate));
+  }
 }
 
 constexpr size_t kDeferredFreesPerScavenge = 512;
@@ -452,6 +481,7 @@ void GCEpilogue(v8::Isolate* aIsolate, v8::GCType aType,
   CollectResetCells(rt);
   SchedulePhantomSweep(rt);
   if (!rt->inGC) {
+    ClearGrayAnchors();
     ReleaseUnmarkedManagedCells(rt);
     FinalizeDeadAnchoredCells(rt);
     return;
@@ -464,6 +494,13 @@ void GCEpilogue(v8::Isolate* aIsolate, v8::GCType aType,
   }
   rt->strongThisGC.clear();
   rt->rootedAnchors.clear();
+  ClearGrayAnchors();
+  static const bool sBarrierLog = !!getenv("VGE_GC_LOG");
+  if (sBarrierLog) {
+    fprintf(stderr, "VGEINGCBARRIER exposure %zu slot %zu heap %zu\n",
+            gBarrierMarksInGC[0], gBarrierMarksInGC[1], gBarrierMarksInGC[2]);
+  }
+  gBarrierMarksInGC[0] = gBarrierMarksInGC[1] = gBarrierMarksInGC[2] = 0;
   rt->inGC = false;
   if (rt->mainContext) {
     JS::GCContext* gcx = reinterpret_cast<JS::GCContext*>(rt);
@@ -521,6 +558,44 @@ void ForgetTail(CellTail* aTail) {
 void WatchRealmContext(JS::Realm* aRealm) {
   aRealm->context.SetWeak(aRealm, RealmContextDied,
                           v8::WeakCallbackType::kParameter);
+}
+
+size_t gBarrierMarksInGC[3] = {};
+
+namespace {
+
+struct GrayAnchorBuffer {
+  std::vector<Anchor*> anchors;
+};
+
+std::mutex sGrayAnchorBuffersLock;
+std::vector<GrayAnchorBuffer*> sGrayAnchorBuffers;
+thread_local GrayAnchorBuffer* tGrayAnchorBuffer = nullptr;
+
+void RecordGrayAnchor(Anchor* aAnchor) {
+  if (!tGrayAnchorBuffer) {
+    tGrayAnchorBuffer = new GrayAnchorBuffer();
+    std::lock_guard<std::mutex> lock(sGrayAnchorBuffersLock);
+    sGrayAnchorBuffers.push_back(tGrayAnchorBuffer);
+  }
+  tGrayAnchorBuffer->anchors.push_back(aAnchor);
+}
+
+}
+
+void TakeGrayAnchors(std::vector<Anchor*>* aOut) {
+  std::lock_guard<std::mutex> lock(sGrayAnchorBuffersLock);
+  for (GrayAnchorBuffer* buffer : sGrayAnchorBuffers) {
+    aOut->insert(aOut->end(), buffer->anchors.begin(), buffer->anchors.end());
+    buffer->anchors.clear();
+  }
+}
+
+void ClearGrayAnchors() {
+  std::lock_guard<std::mutex> lock(sGrayAnchorBuffersLock);
+  for (GrayAnchorBuffer* buffer : sGrayAnchorBuffers) {
+    buffer->anchors.clear();
+  }
 }
 
 void RegisterAnchor(JSRuntime* aRuntime, Anchor* aAnchor) {
@@ -637,6 +712,7 @@ void Anchor::Trace(cppgc::Visitor* aVisitor) const {
 
 void Anchor::TraceGray(JSRuntime* aRuntime,
                        v8::GrayWrapperMarker& aMarker) const {
+  RecordGrayAnchor(const_cast<Anchor*>(this));
   GrayWrapperSlotTracer tracer(aRuntime, aMarker);
   TraceAnchoredCell(mCell, &tracer);
   aMarker.Mark(mWrapper);

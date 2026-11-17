@@ -462,6 +462,9 @@ void MarkForBarrier(const JS::Value& aValue) {
   if (!tail) {
     return;
   }
+  if (rt->inGC) {
+    gBarrierMarksInGC[2]++;
+  }
   MarkCellDuringMarking(rt->isolate, tail);
 }
 

@@ -468,6 +468,9 @@ void SlotWriteBarrier(JSContext* aCx, const JS::Value& aValue) {
   if (!tail) {
     return;
   }
+  if (aCx->runtime->inGC) {
+    gBarrierMarksInGC[1]++;
+  }
   MarkCellDuringMarking(aCx->isolate, tail);
 }
 
