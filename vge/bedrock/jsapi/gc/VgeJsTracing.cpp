@@ -309,8 +309,8 @@ void TraceCellChildren(JSTracer* aTracer, JS::GCCellPtr aThing) {
     if (it != state->ubiEdges.end()) {
       edges = it->second;
     }
-  } else if (state->grayBitsValid) {
-    EnsureCellEdges(*state);
+  } else {
+    EnsureGrayBits(*state);
     auto it = state->jsEdges.find(aThing.asCell());
     if (it != state->jsEdges.end()) {
       edges = it->second;

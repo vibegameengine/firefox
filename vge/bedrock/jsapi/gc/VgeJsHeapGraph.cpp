@@ -218,86 +218,124 @@ class GrayRootTracer final : public JS::CallbackTracer {
   v8::GrayRootMarker& mMarker;
 };
 
-using CellsByAddress = std::unordered_map<uintptr_t, JS::GCCellPtr>;
+class AddressIndex final {
+ public:
+  static constexpr uint32_t kNone = 0xFFFFFFFFu;
 
-CellsByAddress ColorMarkedCells(GcState& aState,
-                                const v8::GrayMarkingResult& aResult,
-                                bool aKeepBlackCells,
-                                std::vector<JS::GCCellPtr>& aCellAt) {
-  CellsByAddress cells;
-  if (aKeepBlackCells) {
-    cells.reserve(aState.runtime->objectCells.size());
+  explicit AddressIndex(size_t aExpected) {
+    size_t capacity = 16;
+    while (capacity < aExpected * 2) {
+      capacity <<= 1;
+    }
+    mSlots.assign(capacity, Slot{0, kNone});
+    mMask = capacity - 1;
   }
-  auto setCellAt = [&](uintptr_t aAddress, JS::GCCellPtr aThing) {
-    uint32_t index = aResult.GrayIndexOf(aAddress);
-    if (index != v8::kNotGrayIndex && !aCellAt[index]) {
-      aCellAt[index] = aThing;
-    }
-  };
-  for (ObjectCell* cell : aState.runtime->objectCells) {
-    if (cell->tail.handle.IsEmpty()) {
-      continue;
-    }
-    uintptr_t address = aResult.AddressOf(cell->tail.handle);
-    uint32_t index = aResult.GrayIndexOf(address);
-    bool gray = index != v8::kNotGrayIndex;
-    if (!gray && !(aKeepBlackCells && aResult.IsMarked(address))) {
-      continue;
-    }
-    JS::GCCellPtr thing(cell->asObject());
-    if (gray) {
-      Color(aState, thing, true);
-      setCellAt(address, thing);
-    }
-    if (aKeepBlackCells) {
-      cells.emplace(address, thing);
-    }
-    const JSClass* clasp = cell->shape ? cell->shape->base.clasp : nullptr;
-    if (clasp && (clasp->flags & JSCLASS_IS_GLOBAL)) {
-      uintptr_t inner = aResult.InnerGlobalOfProxy(address);
-      if (inner) {
-        setCellAt(inner, thing);
-        if (aKeepBlackCells) {
-          cells.emplace(inner, thing);
-        }
+
+  bool Insert(uintptr_t aKey, uint32_t aValue) {
+    for (size_t i = Hash(aKey);; i = (i + 1) & mMask) {
+      Slot& slot = mSlots[i];
+      if (slot.key == aKey) {
+        return false;
+      }
+      if (slot.key == 0) {
+        slot = Slot{aKey, aValue};
+        return true;
       }
     }
   }
-  return cells;
+
+  uint32_t Find(uintptr_t aKey) const {
+    for (size_t i = Hash(aKey);; i = (i + 1) & mMask) {
+      const Slot& slot = mSlots[i];
+      if (slot.key == aKey) {
+        return slot.value;
+      }
+      if (slot.key == 0) {
+        return kNone;
+      }
+    }
+  }
+
+ private:
+  struct Slot {
+    uintptr_t key;
+    uint32_t value;
+  };
+
+  size_t Hash(uintptr_t aKey) const {
+    return static_cast<size_t>((aKey >> 3) * 0x9E3779B97F4A7C15ull >> 20) &
+           mMask;
+  }
+
+  std::vector<Slot> mSlots;
+  size_t mMask = 0;
+};
+
+struct CellSnapshot {
+  JS::GCCellPtr thing;
+  uintptr_t address;
+  uintptr_t inner;
+};
+
+struct GrayInput {
+  std::vector<uintptr_t> objects;
+  std::vector<v8::GrayMarkingEdge> edges;
+  std::vector<uintptr_t> tables;
+  std::vector<v8::GrayMarkingEphemeron> ephemerons;
+  std::vector<v8::GrayMarkingWeakRef> weakRefs;
+  std::vector<std::vector<CellSnapshot>> cellChunks;
+  std::vector<CellSnapshot> cells;
+};
+
+void SnapshotBuckets(const std::unordered_set<ObjectCell*>& aCells,
+                     size_t aBegin, size_t aEnd,
+                     const v8::GrayMarkingResult& aResult,
+                     std::vector<CellSnapshot>& aOut) {
+  for (size_t bucket = aBegin; bucket < aEnd; bucket++) {
+    for (auto it = aCells.begin(bucket); it != aCells.end(bucket); ++it) {
+      ObjectCell* cell = *it;
+      if (cell->tail.handle.IsEmpty()) {
+        continue;
+      }
+      uintptr_t address = aResult.AddressOf(cell->tail.handle);
+      if (!aResult.IsMarked(address)) {
+        continue;
+      }
+      uintptr_t inner = 0;
+      const JSClass* clasp = cell->shape ? cell->shape->base.clasp : nullptr;
+      if (clasp && (clasp->flags & JSCLASS_IS_GLOBAL)) {
+        inner = aResult.InnerGlobalOfProxy(address);
+      }
+      aOut.push_back({JS::GCCellPtr(cell->asObject()), address, inner});
+    }
+  }
 }
 
-void CollectWeakEntries(GcState& aState, const v8::GrayMarkingResult& aResult,
-                        const CellsByAddress& aCells,
-                        std::vector<v8::GrayMarkingEdge>& aEdges) {
-  size_t count = 0;
-  const v8::GrayMarkingEphemeron* ephemerons = aResult.Ephemerons(&count);
-  for (size_t i = 0; i < count; i++) {
-    const v8::GrayMarkingEphemeron& entry = ephemerons[i];
-    auto key = aCells.find(entry.key);
-    auto value = aCells.find(entry.value);
-    auto map = entry.owner ? aCells.find(entry.owner) : aCells.end();
-    if (key != aCells.end() && value != aCells.end() &&
-        (!entry.owner || map != aCells.end())) {
-      JSObject* mapObj = entry.owner ? &map->second.as<JSObject>() : nullptr;
-      aState.weakMapEntries.push_back({mapObj, key->second, value->second});
-      continue;
-    }
-    if (aResult.IsGray(entry.key)) {
-      aEdges.push_back({entry.key, entry.value});
-    }
-    if (aResult.IsGray(entry.table)) {
-      aEdges.push_back({entry.table, entry.value});
-    }
+std::vector<std::vector<CellSnapshot>> SnapshotCells(
+    const std::unordered_set<ObjectCell*>& aCells,
+    const v8::GrayMarkingResult& aResult) {
+  constexpr size_t kCellsPerChunk = 2048;
+  size_t buckets = aCells.bucket_count();
+  size_t chunks = std::clamp<size_t>(aCells.size() / kCellsPerChunk, 1, 8);
+  std::vector<std::vector<CellSnapshot>> out(chunks);
+  std::vector<std::future<void>> workers;
+  for (size_t c = 1; c < chunks; c++) {
+    workers.push_back(std::async(std::launch::async, [&, c] {
+      out[c].reserve(aCells.size() / chunks);
+      SnapshotBuckets(aCells, buckets * c / chunks,
+                      buckets * (c + 1) / chunks, aResult, out[c]);
+    }));
   }
-  const v8::GrayMarkingWeakRef* refs = aResult.WeakRefs(&count);
-  for (size_t i = 0; i < count; i++) {
-    auto ref = aCells.find(refs[i].ref);
-    auto target = aCells.find(refs[i].target);
-    if (ref != aCells.end() && target != aCells.end()) {
-      aState.weakRefTargets.emplace_back(&ref->second.as<JSObject>(),
-                                         &target->second.as<JSObject>());
-    }
+  out[0].reserve(aCells.size() / chunks);
+  SnapshotBuckets(aCells, 0, buckets / chunks, aResult, out[0]);
+  for (std::future<void>& worker : workers) {
+    worker.wait();
   }
+  return out;
+}
+
+JSObject* ObjectOf(const CellSnapshot& aCell) {
+  return reinterpret_cast<JSObject*>(aCell.thing.asCell());
 }
 
 std::unordered_map<js::gc::Cell*, std::vector<JS::GCCellPtr>> ExpandCellEdges(
@@ -341,47 +379,202 @@ std::unordered_map<js::gc::Cell*, std::vector<JS::GCCellPtr>> ExpandCellEdges(
   return result;
 }
 
-void CollectCellEdges(GcState& aState, const v8::GrayMarkingResult& aResult,
-                      std::vector<JS::GCCellPtr>&& aCellAt,
-                      std::vector<v8::GrayMarkingEdge>&& aEdges) {
-  size_t grayCount = 0;
-  const uintptr_t* grayObjects = aResult.GrayObjects(&grayCount);
-  std::vector<uintptr_t> addresses(grayObjects, grayObjects + grayCount);
-  aState.pendingCellEdges = std::async(
-      std::launch::async,
-      [cellAt = std::move(aCellAt), addresses = std::move(addresses),
-       edges = std::move(aEdges)]() {
-        std::unordered_map<uintptr_t, uint32_t> indexOf;
-        indexOf.reserve(addresses.size() * 2);
-        for (uint32_t i = 0; i < addresses.size(); i++) {
-          indexOf.emplace(addresses[i], i);
-        }
-        size_t nodeCount = cellAt.size();
-        std::vector<uint32_t> fromIndex(edges.size());
-        std::vector<uint32_t> toIndex(edges.size());
-        std::vector<uint32_t> offsets(nodeCount + 1, 0);
-        for (size_t e = 0; e < edges.size(); e++) {
-          fromIndex[e] = indexOf[edges[e].from];
-          toIndex[e] = indexOf[edges[e].to];
-          offsets[fromIndex[e] + 1]++;
-        }
-        for (size_t i = 0; i < nodeCount; i++) {
-          offsets[i + 1] += offsets[i];
-        }
-        std::vector<uint32_t> targets(edges.size());
-        std::vector<uint32_t> fill(offsets.begin(), offsets.end() - 1);
-        for (size_t e = 0; e < edges.size(); e++) {
-          targets[fill[fromIndex[e]]++] = toIndex[e];
-        }
-        return ExpandCellEdges(cellAt, offsets, targets);
-      });
+GrayResult BuildGrayResult(GrayInput&& aIn) {
+  mozilla::TimeStamp start = mozilla::TimeStamp::Now();
+  GrayResult out;
+  constexpr uint32_t kNone = AddressIndex::kNone;
+
+  for (std::vector<CellSnapshot>& chunk : aIn.cellChunks) {
+    aIn.cells.insert(aIn.cells.end(), chunk.begin(), chunk.end());
+  }
+  aIn.cellChunks.clear();
+
+  AddressIndex gray(aIn.objects.size());
+  uint32_t nodeCount = 0;
+  for (uintptr_t address : aIn.objects) {
+    if (gray.Insert(address, nodeCount)) {
+      aIn.objects[nodeCount++] = address;
+    }
+  }
+  aIn.objects.resize(nodeCount);
+
+  const bool needCells = !aIn.ephemerons.empty() || !aIn.weakRefs.empty();
+  AddressIndex cellIndex(needCells ? aIn.cells.size() * 2 : 0);
+  std::vector<JS::GCCellPtr> cellAt(nodeCount);
+  for (uint32_t i = 0; i < aIn.cells.size(); i++) {
+    const CellSnapshot& cell = aIn.cells[i];
+    uint32_t n = gray.Find(cell.address);
+    if (n != kNone) {
+      out.gray.push_back(cell.thing);
+      if (!cellAt[n]) {
+        cellAt[n] = cell.thing;
+      }
+    }
+    if (cell.inner) {
+      uint32_t m = gray.Find(cell.inner);
+      if (m != kNone && !cellAt[m]) {
+        cellAt[m] = cell.thing;
+      }
+    }
+    if (needCells) {
+      cellIndex.Insert(cell.address, i);
+      if (cell.inner) {
+        cellIndex.Insert(cell.inner, i);
+      }
+    }
+  }
+
+  AddressIndex tables(aIn.tables.size());
+  for (uint32_t i = 0; i < aIn.tables.size(); i++) {
+    tables.Insert(aIn.tables[i], i);
+  }
+  std::vector<uintptr_t> tableOwner(aIn.tables.size(), 0);
+  std::vector<uint32_t> fromIndex;
+  std::vector<uint32_t> toIndex;
+  fromIndex.reserve(aIn.edges.size());
+  toIndex.reserve(aIn.edges.size());
+  for (const v8::GrayMarkingEdge& edge : aIn.edges) {
+    uint32_t from = gray.Find(edge.from);
+    if (from == kNone) {
+      continue;
+    }
+    uint32_t to = gray.Find(edge.to);
+    if (to == kNone) {
+      continue;
+    }
+    if (!aIn.tables.empty()) {
+      if (tables.Find(edge.from) != kNone) {
+        continue;
+      }
+      uint32_t table = tables.Find(edge.to);
+      if (table != kNone) {
+        tableOwner[table] = edge.from;
+      }
+    }
+    fromIndex.push_back(from);
+    toIndex.push_back(to);
+  }
+
+  auto cellOf = [&](uintptr_t aAddress) -> const CellSnapshot* {
+    if (!aAddress) {
+      return nullptr;
+    }
+    uint32_t i = cellIndex.Find(aAddress);
+    return i == kNone ? nullptr : &aIn.cells[i];
+  };
+  auto addEdge = [&](uintptr_t aFrom, uintptr_t aTo) {
+    fromIndex.push_back(gray.Find(aFrom));
+    toIndex.push_back(gray.Find(aTo));
+  };
+  for (const v8::GrayMarkingEphemeron& entry : aIn.ephemerons) {
+    if (gray.Find(entry.value) == kNone) {
+      continue;
+    }
+    uint32_t table = tables.Find(entry.table);
+    uintptr_t owner = table == kNone ? 0 : tableOwner[table];
+    const CellSnapshot* key = cellOf(entry.key);
+    const CellSnapshot* value = cellOf(entry.value);
+    const CellSnapshot* map = cellOf(owner);
+    if (key && value && (!owner || map)) {
+      out.weakMapEntries.push_back(
+          {map ? ObjectOf(*map) : nullptr, key->thing, value->thing});
+      continue;
+    }
+    if (gray.Find(entry.key) != kNone) {
+      addEdge(entry.key, entry.value);
+    }
+    if (gray.Find(entry.table) != kNone) {
+      addEdge(entry.table, entry.value);
+    }
+  }
+
+  AddressIndex seenRefs(aIn.weakRefs.size());
+  for (const v8::GrayMarkingWeakRef& ref : aIn.weakRefs) {
+    if (gray.Find(ref.target) == kNone || !seenRefs.Insert(ref.ref, 0)) {
+      continue;
+    }
+    const CellSnapshot* refCell = cellOf(ref.ref);
+    const CellSnapshot* targetCell = cellOf(ref.target);
+    if (refCell && targetCell) {
+      out.weakRefTargets.emplace_back(ObjectOf(*refCell),
+                                      ObjectOf(*targetCell));
+    }
+  }
+
+  std::vector<uint32_t> offsets(nodeCount + 1, 0);
+  for (uint32_t from : fromIndex) {
+    offsets[from + 1]++;
+  }
+  for (uint32_t i = 0; i < nodeCount; i++) {
+    offsets[i + 1] += offsets[i];
+  }
+  std::vector<uint32_t> targets(fromIndex.size());
+  std::vector<uint32_t> fill(offsets.begin(), offsets.end() - 1);
+  for (size_t e = 0; e < fromIndex.size(); e++) {
+    targets[fill[fromIndex[e]]++] = toIndex[e];
+  }
+  out.jsEdges = ExpandCellEdges(cellAt, offsets, targets);
+  out.buildMs = (mozilla::TimeStamp::Now() - start).ToMilliseconds();
+  return out;
 }
+
+class GrayApplyTask final : public v8::Task {
+ public:
+  GrayApplyTask(JSRuntime* aRuntime, uint64_t aEpoch)
+      : mRuntime(aRuntime), mEpoch(aEpoch) {}
+
+  void Run() override {
+    GcState* state = MaybeStateOf(mRuntime);
+    if (state && state->grayPending && state->grayEpoch == mEpoch) {
+      EnsureGrayBits(*state);
+    }
+  }
+
+ private:
+  JSRuntime* mRuntime;
+  uint64_t mEpoch;
+};
 
 }  // namespace
 
-void EnsureCellEdges(GcState& aState) {
-  if (aState.pendingCellEdges.valid()) {
-    aState.jsEdges = aState.pendingCellEdges.get();
+void EnsureGrayBits(GcState& aState) {
+  if (!aState.grayPending) {
+    return;
+  }
+  mozilla::TimeStamp start = mozilla::TimeStamp::Now();
+  bool ready = aState.pendingGray.wait_for(std::chrono::seconds(0)) ==
+               std::future_status::ready;
+  GrayResult result = aState.pendingGray.get();
+  aState.grayPending = false;
+  mozilla::TimeStamp got = mozilla::TimeStamp::Now();
+  for (JS::GCCellPtr thing : result.gray) {
+    Color(aState, thing, true);
+  }
+  aState.jsEdges = std::move(result.jsEdges);
+  aState.weakMapEntries = std::move(result.weakMapEntries);
+  aState.weakRefTargets = std::move(result.weakRefTargets);
+  aState.grayBitsValid = true;
+  if (!aState.v8Marking) {
+    SetZoneReadBarrier(aState, false);
+  }
+  std::vector<JS::GCCellPtr> exposed;
+  exposed.swap(aState.exposedWhileGrayPending);
+  size_t unmarked = 0;
+  for (JS::GCCellPtr thing : exposed) {
+    if (IsVgeCell(thing.asCell()) && IsGray(thing.asCell())) {
+      unmarked += JS::UnmarkGrayGCThingRecursively(thing);
+    }
+  }
+  static const bool sLog = !!getenv("VGE_GC_LOG");
+  if (sLog) {
+    mozilla::TimeStamp end = mozilla::TimeStamp::Now();
+    fprintf(stderr,
+            "VGEGRAYAPPLY build %.3f wait %.3f apply %.3f ready %d gray %zu "
+            "exposed %zu unmarked %zu\n",
+            result.buildMs, (got - start).ToMilliseconds(),
+            (end - got).ToMilliseconds(), ready, result.gray.size(),
+            exposed.size(), unmarked);
+    fflush(stderr);
   }
 }
 
@@ -420,38 +613,55 @@ class CellGrayMarkingClient final : public v8::GrayMarkingClient {
 
   void GrayMarkingFinished(const v8::GrayMarkingResult& aResult) override {
     mozilla::TimeStamp start = mozilla::TimeStamp::Now();
-    size_t ephemeronCount = 0;
-    size_t weakRefCount = 0;
-    aResult.Ephemerons(&ephemeronCount);
-    aResult.WeakRefs(&weakRefCount);
-    size_t nodeCount = 0;
-    aResult.GrayObjects(&nodeCount);
-    std::vector<JS::GCCellPtr> cellAt(nodeCount);
-    CellsByAddress cells = ColorMarkedCells(
-        mState, aResult, ephemeronCount || weakRefCount, cellAt);
-    mozilla::TimeStamp colored = mozilla::TimeStamp::Now();
-    size_t edgeCount = 0;
-    const v8::GrayMarkingEdge* edges = aResult.Edges(&edgeCount);
-    std::vector<v8::GrayMarkingEdge> allEdges(edges, edges + edgeCount);
-    CollectWeakEntries(mState, aResult, cells, allEdges);
-    mozilla::TimeStamp weak = mozilla::TimeStamp::Now();
-    CollectCellEdges(mState, aResult, std::move(cellAt), std::move(allEdges));
-    mState.grayBitsValid = true;
+    GrayInput input;
+    size_t count = 0;
+    const uintptr_t* objects = aResult.GrayObjects(&count);
+    input.objects.assign(objects, objects + count);
+    const size_t nodeCount = count;
+    const v8::GrayMarkingEdge* edges = aResult.Edges(&count);
+    input.edges.assign(edges, edges + count);
+    const size_t edgeCount = count;
+    const uintptr_t* tables = aResult.EphemeronTables(&count);
+    input.tables.assign(tables, tables + count);
+    const v8::GrayMarkingEphemeron* ephemerons = aResult.Ephemerons(&count);
+    input.ephemerons.assign(ephemerons, ephemerons + count);
+    const size_t ephemeronCount = count;
+    const v8::GrayMarkingWeakRef* refs = aResult.WeakRefs(&count);
+    input.weakRefs.assign(refs, refs + count);
+    mozilla::TimeStamp copied = mozilla::TimeStamp::Now();
+    input.cellChunks = SnapshotCells(mState.runtime->objectCells, aResult);
+    mozilla::TimeStamp snapped = mozilla::TimeStamp::Now();
+    size_t snappedCount = 0;
+    for (const std::vector<CellSnapshot>& chunk : input.cellChunks) {
+      snappedCount += chunk.size();
+    }
+    JSRuntime* rt = mState.runtime;
+    uint64_t epoch = ++mState.grayEpoch;
+    std::shared_ptr<v8::TaskRunner> runner =
+        CurrentPlatform()->GetForegroundTaskRunner(rt->isolate);
+    mState.pendingGray = std::async(
+        std::launch::async,
+        [input = std::move(input), runner, rt, epoch]() mutable {
+          GrayResult result = BuildGrayResult(std::move(input));
+          runner->PostTask(std::make_unique<GrayApplyTask>(rt, epoch));
+          return result;
+        });
+    mState.grayPending = true;
+    SetZoneReadBarrier(mState, true);
     static const bool sLog = !!getenv("VGE_GC_LOG");
     if (sLog) {
       mozilla::TimeStamp end = mozilla::TimeStamp::Now();
       fprintf(stderr,
-              "VGEGRAY roots %.3f closure %.3f client %.3f color %.3f weak "
-              "%.3f edges %.3f gray %zu edges %zu ephemerons %zu cells %zu "
+              "VGEGRAY roots %.3f closure %.3f client %.3f copy %.3f snap "
+              "%.3f gray %zu edges %zu ephemerons %zu cells %zu snapped %zu "
               "young %zu traced %zu globals_kb %zu strings %lld "
               "created_strings %lld anchored %zu phantom %zu\n",
               mRootsMs, (start - mRootsEnd).ToMilliseconds(),
               (end - start).ToMilliseconds(),
-              (colored - start).ToMilliseconds(),
-              (weak - colored).ToMilliseconds(), (end - weak).ToMilliseconds(),
-              nodeCount, edgeCount, ephemeronCount,
-              mState.runtime->objectCells.size(),
-              mState.runtime->youngTails.size(),
+              (copied - start).ToMilliseconds(),
+              (snapped - copied).ToMilliseconds(), nodeCount, edgeCount,
+              ephemeronCount, mState.runtime->objectCells.size(),
+              snappedCount, mState.runtime->youngTails.size(),
               mState.runtime->tracedTails.size(), GlobalHandlesKb(mState),
               static_cast<long long>(gLiveStringCells.load()),
               static_cast<long long>(gCreatedStringCells.load()),
@@ -482,9 +692,14 @@ void InvalidateGrayBits(GcState& aState) {
   }
   aState.coloredCells.clear();
   aState.grayCells.clear();
-  if (aState.pendingCellEdges.valid()) {
-    aState.pendingCellEdges.wait();
-    aState.pendingCellEdges = {};
+  if (aState.pendingGray.valid()) {
+    aState.pendingGray.wait();
+    aState.pendingGray = {};
+  }
+  aState.grayPending = false;
+  aState.exposedWhileGrayPending.clear();
+  if (!aState.v8Marking) {
+    SetZoneReadBarrier(aState, false);
   }
   aState.jsEdges.clear();
   aState.weakMapEntries.clear();
@@ -630,6 +845,9 @@ JS_PUBLIC_API bool JS::UnmarkGrayGCThingRecursively(JS::GCCellPtr thing) {
   if (!rt) {
     return false;
   }
+  if (GcState* state = MaybeStateOf(rt)) {
+    EnsureGrayBits(*state);
+  }
   UnmarkGrayTracer tracer(rt);
   return tracer.Run(thing);
 }
@@ -638,6 +856,9 @@ JS_PUBLIC_API bool js::gc::detail::CanCheckGrayBits(
     const js::gc::TenuredCell* cell) {
   JSRuntime* rt = vge::jsapi::Runtime();
   GcState* state = rt ? MaybeStateOf(rt) : nullptr;
+  if (state) {
+    EnsureGrayBits(*state);
+  }
   return state && state->grayBitsValid && !state->v8Marking;
 }
 
@@ -645,10 +866,13 @@ JS_PUBLIC_API bool js::gc::detail::CellIsMarkedGrayIfKnown(
     const js::gc::TenuredCell* cell) {
   js::gc::Cell* c =
       reinterpret_cast<js::gc::Cell*>(const_cast<js::gc::TenuredCell*>(cell));
-  if (!IsVgeCell(c) || !IsGray(c)) {
+  if (!IsVgeCell(c)) {
     return false;
   }
-  return CanCheckGrayBits(cell);
+  if (!CanCheckGrayBits(cell)) {
+    return false;
+  }
+  return IsGray(c);
 }
 
 JS_PUBLIC_API void JS_SetGrayGCRootsTracer(JSContext* cx,
@@ -683,6 +907,7 @@ JS_PUBLIC_API void JS::MaybeClearWeakRefTargets(
     JSRuntime* runtime, JS::ShouldClearWeakRefTargetCallback callback,
     void* data) {
   GcState& state = StateOf(runtime);
+  EnsureGrayBits(state);
   std::vector<std::pair<JSObject*, JSObject*>> kept;
   for (auto& [ref, target] : state.weakRefTargets) {
     if (!callback(JS::GCCellPtr(target), data)) {
@@ -694,6 +919,7 @@ JS_PUBLIC_API void JS::MaybeClearWeakRefTargets(
 
 JS_PUBLIC_API void js::TraceWeakMaps(js::WeakMapTracer* trc) {
   GcState& state = StateOf(trc->runtime);
+  EnsureGrayBits(state);
   for (const WeakMapEntry& entry : state.weakMapEntries) {
     trc->trace(entry.map, entry.key, entry.value);
   }
@@ -701,11 +927,17 @@ JS_PUBLIC_API void js::TraceWeakMaps(js::WeakMapTracer* trc) {
 
 JS_PUBLIC_API bool js::AreGCGrayBitsValid(JSRuntime* rt) {
   GcState* state = MaybeStateOf(rt);
+  if (state) {
+    EnsureGrayBits(*state);
+  }
   return state && state->grayBitsValid;
 }
 
 JS_PUBLIC_API bool js::ZoneGlobalsAreAllGray(JS::Zone* zone) {
   JSRuntime* rt = JS::shadow::Zone::from(zone)->runtimeFromAnyThread();
+  if (GcState* state = MaybeStateOf(rt)) {
+    EnsureGrayBits(*state);
+  }
   for (JS::Realm* realm : rt->realms) {
     if (realm->contextDead) {
       continue;
@@ -721,6 +953,7 @@ JS_PUBLIC_API bool js::ZoneGlobalsAreAllGray(JS::Zone* zone) {
 JS_PUBLIC_API void js::TraceGrayWrapperTargets(JSTracer* trc, JS::Zone* zone) {
   JSRuntime* rt = JS::shadow::Zone::from(zone)->runtimeFromAnyThread();
   GcState& state = StateOf(rt);
+  EnsureGrayBits(state);
   std::vector<JS::GCCellPtr> gray = state.grayCells;
   for (JS::GCCellPtr thing : gray) {
     if (!thing.is<JSObject>()) {
@@ -743,6 +976,7 @@ JS_PUBLIC_API void js::IterateGrayObjects(JS::Zone* zone,
                                           void* data) {
   JSRuntime* rt = JS::shadow::Zone::from(zone)->runtimeFromAnyThread();
   GcState& state = StateOf(rt);
+  EnsureGrayBits(state);
   JS::AutoCheckCannotGC nogc;
   std::vector<JS::GCCellPtr> gray = state.grayCells;
   for (JS::GCCellPtr thing : gray) {

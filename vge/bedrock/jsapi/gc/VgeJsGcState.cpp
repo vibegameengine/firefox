@@ -14,6 +14,10 @@ struct ZoneBits : public JS::shadow::Zone {
     zone->needsMarkingBarrier_ = aOn ? uint32_t(Incremental) : 0;
     zone->gcState_ = aOn ? MarkBlackOnly : NoGC;
   }
+  static void SetBarrier(JS::Zone* aZone, bool aOn) {
+    ZoneBits* zone = static_cast<ZoneBits*>(JS::shadow::Zone::from(aZone));
+    zone->needsMarkingBarrier_ = aOn ? uint32_t(Incremental) : 0;
+  }
 };
 
 class WeakSweepTracer final : public JS::CallbackTracer {
@@ -186,6 +190,9 @@ void Epilogue(v8::Isolate* aIsolate, v8::GCType aType,
     state.majorNumber++;
     state.v8Marking = false;
     ZoneBits::SetMarking(state.runtime->zone, false);
+    if (state.grayPending) {
+      ZoneBits::SetBarrier(state.runtime->zone, true);
+    }
     EndSlice(state);
     state.cycleEnd = mozilla::TimeStamp::Now();
     state.heapAfterCycle = V8HeapUsed(aIsolate);
@@ -296,6 +303,10 @@ void RunFullGC(JSContext* aCx, JS::GCOptions aOptions, JS::GCReason aReason) {
   }
 }
 
+void SetZoneReadBarrier(GcState& aState, bool aOn) {
+  ZoneBits::SetBarrier(aState.runtime->zone, aOn);
+}
+
 void MarkingBarrier(JS::GCCellPtr aThing) {
   if (!aThing) {
     return;
@@ -309,7 +320,13 @@ void MarkingBarrier(JS::GCCellPtr aThing) {
     return;
   }
   GcState* state = MaybeStateOf(cx->runtime);
-  if (!state || !state->v8Marking) {
+  if (!state) {
+    return;
+  }
+  if (state->grayPending) {
+    state->exposedWhileGrayPending.push_back(aThing);
+  }
+  if (!state->v8Marking) {
     return;
   }
   v8::HandleScope scope(cx->isolate);

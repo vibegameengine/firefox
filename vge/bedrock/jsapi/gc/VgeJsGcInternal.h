@@ -46,6 +46,14 @@ struct WeakMapEntry {
   JS::GCCellPtr value;
 };
 
+struct GrayResult {
+  std::vector<JS::GCCellPtr> gray;
+  std::vector<WeakMapEntry> weakMapEntries;
+  std::vector<std::pair<JSObject*, JSObject*>> weakRefTargets;
+  std::unordered_map<js::gc::Cell*, std::vector<JS::GCCellPtr>> jsEdges;
+  double buildMs = 0;
+};
+
 struct CodeRange {
   uintptr_t start;
   size_t length;
@@ -110,8 +118,10 @@ struct GcState {
   std::vector<JS::GCCellPtr> coloredCells;
   std::vector<JS::GCCellPtr> grayCells;
   std::unordered_map<js::gc::Cell*, std::vector<JS::GCCellPtr>> jsEdges;
-  std::future<std::unordered_map<js::gc::Cell*, std::vector<JS::GCCellPtr>>>
-      pendingCellEdges;
+  std::future<GrayResult> pendingGray;
+  bool grayPending = false;
+  uint64_t grayEpoch = 0;
+  std::vector<JS::GCCellPtr> exposedWhileGrayPending;
   std::vector<WeakMapEntry> weakMapEntries;
   bool ubiValid = false;
   std::unordered_map<js::gc::Cell*, std::vector<JS::GCCellPtr>> ubiEdges;
@@ -167,7 +177,8 @@ void EnsureHooks(JSContext* aCx);
 
 void RunFullGC(JSContext* aCx, JS::GCOptions aOptions, JS::GCReason aReason);
 void InvalidateGrayBits(GcState& aState);
-void EnsureCellEdges(GcState& aState);
+void EnsureGrayBits(GcState& aState);
+void SetZoneReadBarrier(GcState& aState, bool aOn);
 void InvalidateUbiGraph(GcState& aState);
 void InstallGrayMarkingClient(GcState& aState);
 const v8::HeapSnapshot* TakeReportSnapshot(
