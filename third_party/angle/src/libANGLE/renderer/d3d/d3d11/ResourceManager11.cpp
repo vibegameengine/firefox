@@ -509,6 +509,13 @@ void VgeNote(const void *device, const std::string &category, int64_t count, int
     auto &slot = memory.totals[{device, category}];
     slot.first += count;
     slot.second += bytes;
+    if (bytes >= (1 << 20) || bytes <= -(1 << 20))
+    {
+        fprintf(stderr, "VGEANGLE event device=%p %s bytes_mb=%lld total_mb=%lld\n", device,
+                category.c_str(), static_cast<long long>(bytes >> 20),
+                static_cast<long long>(slot.second >> 20));
+        fflush(stderr);
+    }
     auto now = std::chrono::steady_clock::now();
     if (now - memory.lastPrint < std::chrono::seconds(2))
         return;

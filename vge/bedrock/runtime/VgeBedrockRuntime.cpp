@@ -77,6 +77,7 @@
 #include "nsIMemoryInfoDumper.h"
 #include "GeckoProfiler.h"
 #include "VgeAllocTrace.h"
+#include "VgeGpuTrace.h"
 #include "nsIWebNavigation.h"
 #include "nsIWindowlessBrowser.h"
 #include "nsLayoutUtils.h"
@@ -578,6 +579,7 @@ int RunWindow(const char* aUrl, int aWidth, int aHeight) {
   ScheduleMemoryPressure();
   StartColdMemoryManager();
       ScheduleAllocTraceReport();
+      ScheduleGpuTraceReport();
       ScheduleProfileSave();
       gfx::gfxConfig::ForEachFeature(
           [](const char* aName, const char* aDescription,
@@ -743,6 +745,7 @@ int VgeBedrock_RunLayoutTest(int aArgc, char** aArgv) {
 
   setvbuf(stdout, nullptr, _IONBF, 0);
   vge::bedrock::InstallAllocTrace();
+  vge::bedrock::InstallGpuTrace();
   printf("stage: start\n");
   NS_LogInit();
   LogModule::Init(aArgc, aArgv);

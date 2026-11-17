@@ -6,6 +6,10 @@
 
 #include <d3d11.h>
 
+#include <atomic>
+
+#include "prenv.h"
+
 #include "GLContextEGL.h"
 #include "GLLibraryEGL.h"
 #include "mozilla/gfx/DeviceManagerDx.h"
@@ -142,6 +146,8 @@ SharedSurface_ANGLEShareHandle::Create(const SharedSurfaceDesc& desc) {
       keyedMutex));
 }
 
+static std::atomic<int> sLiveShareSurfaces{0};
+
 SharedSurface_ANGLEShareHandle::SharedSurface_ANGLEShareHandle(
     const SharedSurfaceDesc& desc, const RefPtr<ID3D11Device> aDevice,
     const std::weak_ptr<EglDisplay>& egl, EGLSurface pbuffer,
@@ -160,9 +166,18 @@ SharedSurface_ANGLEShareHandle::SharedSurface_ANGLEShareHandle(
   MOZ_ASSERT((mKeyedMutex && mFencesHolderId.isNothing()) ||
              (!mKeyedMutex && mFencesHolderId.isSome()));
   MOZ_ASSERT_IF(mFencesHolderId.isSome(), mWriteFence);
+  static std::atomic<int> sCreated{0};
+  int created = ++sCreated;
+  int live = ++sLiveShareSurfaces;
+  static const bool sLog = !!PR_GetEnv("VGE_RT_LOG");
+  if (sLog && created % 20 == 0) {
+    printf_stderr("VGEGL share-surfaces created=%d live=%d %dx%d\n", created,
+                  live, mDesc.size.width, mDesc.size.height);
+  }
 }
 
 SharedSurface_ANGLEShareHandle::~SharedSurface_ANGLEShareHandle() {
+  --sLiveShareSurfaces;
   const auto& gl = mDesc.gl;
 
   if (gl && GLContextEGL::Cast(gl)->GetEGLSurfaceOverride() == mPBuffer) {

@@ -1150,7 +1150,7 @@ bool WebGLContext::PresentInto(gl::SwapChain& swapChain) {
         .destRect = {},
     });
 
-    gl->fBindFramebuffer(LOCAL_GL_READ_FRAMEBUFFER, canvasFb->mFB);
+    gl->fBindFramebuffer(LOCAL_GL_READ_FRAMEBUFFER, mDefaultFB->mFB);
     return {};
   }();
   if (error) {
@@ -2049,7 +2049,6 @@ ScopedDrawCallWrapper::ScopedDrawCallWrapper(WebGLContext& webgl)
 ScopedDrawCallWrapper::~ScopedDrawCallWrapper() {
   if (mWebGL.mBoundDrawFramebuffer) return;
 
-  mWebGL.mResolvedDefaultFB = nullptr;
   mWebGL.mShouldPresent = true;
 }
 

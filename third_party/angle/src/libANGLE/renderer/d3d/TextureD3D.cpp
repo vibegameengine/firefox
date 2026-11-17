@@ -11,6 +11,13 @@
 
 #include <memory>
 
+#include <windows.h>
+
+#include <atomic>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+
 #include "common/mathutil.h"
 #include "common/utilities.h"
 #include "libANGLE/Buffer.h"
@@ -32,6 +39,41 @@
 
 namespace rx
 {
+
+namespace
+{
+void VgeNoteStorageRelease(int width, int height)
+{
+    static const bool enabled = getenv("VGE_ANGLE_MEM") != nullptr;
+    if (!enabled || width * height < 250000)
+    {
+        return;
+    }
+    static std::atomic<int> count{0};
+    if (++count % 200 != 1)
+    {
+        return;
+    }
+    void *frames[24];
+    USHORT depth = RtlCaptureStackBackTrace(0, 24, frames, nullptr);
+    fprintf(stderr, "VGEANGLE storage-release %dx%d count=%d", width, height, count.load());
+    for (USHORT i = 0; i < depth; i++)
+    {
+        HMODULE module = nullptr;
+        GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                               GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           static_cast<LPCWSTR>(frames[i]), &module);
+        char name[MAX_PATH] = {};
+        GetModuleFileNameA(module, name, MAX_PATH);
+        const char *base = strrchr(name, 92);
+        fprintf(stderr, " %s+0x%llx", base ? base + 1 : name,
+                static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(frames[i]) -
+                                                reinterpret_cast<uintptr_t>(module)));
+    }
+    fprintf(stderr, "\n");
+    fflush(stderr);
+}
+}  // namespace
 
 namespace
 {
@@ -1058,6 +1100,7 @@ angle::Result TextureD3D::releaseTexStorage(
 
     onStateChange(angle::SubjectMessage::StorageReleased);
 
+    VgeNoteStorageRelease(mTexStorage->getLevelWidth(0), mTexStorage->getLevelHeight(0));
     auto err = mTexStorage->onDestroy(context);
     if (!IsError(err))
     {
