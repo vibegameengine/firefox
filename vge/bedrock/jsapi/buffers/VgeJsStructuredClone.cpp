@@ -673,7 +673,11 @@ struct JSStructuredCloneWriter {
 Kind JSStructuredCloneWriter::classify(v8::Local<v8::Object> aObj,
                                        v8::Local<v8::Object>* aTarget) {
   JSContext* cx = context();
-  JSObject* cell = ObjectFromV8(cx, aObj);
+  JSObject* cell = ExistingObjectFromV8(cx, aObj);
+  if (!cell) {
+    *aTarget = aObj;
+    return KindOfV8(aObj);
+  }
   JSObject* unwrapped = cell;
   if (js::IsProxy(cell)) {
     unwrapped = js::CheckedUnwrapStatic(cell);
@@ -731,10 +735,8 @@ bool JSStructuredCloneWriter::writeBigInt(uint32_t aTag,
 }
 
 bool JSStructuredCloneWriter::writeTypedArray(v8::Local<v8::Object> aView) {
-  JSContext* cx = context();
   v8::Local<v8::TypedArray> view = aView.As<v8::TypedArray>();
-  JSObject* cell = BufferObjectFromV8(cx, aView);
-  JS::Scalar::Type type = JS_GetArrayBufferViewType(cell);
+  JS::Scalar::Type type = ScalarOf(aView);
   v8::Local<v8::ArrayBuffer> buffer = view->Buffer();
   if (!out.writePair(SCTAG_TYPED_ARRAY_OBJECT, uint32_t(type))) {
     return false;
@@ -833,8 +835,7 @@ bool JSStructuredCloneWriter::writeSharedArrayBuffer(
 bool JSStructuredCloneWriter::startObject(v8::Local<v8::Object> aObj,
                                           bool* aBackref) {
   v8::Local<v8::Value> index;
-  if (memory->Has(ctx, aObj).FromMaybe(false) &&
-      memory->Get(ctx, aObj).ToLocal(&index)) {
+  if (memory->Get(ctx, aObj).ToLocal(&index) && !index->IsUndefined()) {
     *aBackref = true;
     return out.writePair(SCTAG_BACK_REFERENCE_OBJECT,
                          index.As<v8::Uint32>()->Value());
@@ -1627,6 +1628,63 @@ bool JSStructuredCloneReader::readTypedArray(uint32_t aArrayType,
   if (!v->IsArrayBuffer() && !v->IsSharedArrayBuffer()) {
     ReportBadData(cx, "typed array must be backed by an ArrayBuffer");
     return false;
+  }
+  if (!isAutoLength && v->IsArrayBuffer()) {
+    v8::Local<v8::ArrayBuffer> arrayBuffer = v.As<v8::ArrayBuffer>();
+    JS::Scalar::Type type = JS::Scalar::Type(aArrayType);
+    size_t elementSize = ElementSize(type);
+    size_t offset = size_t(byteOffset);
+    size_t count = size_t(aNelems);
+    v8::Local<v8::TypedArray> view;
+    if (offset % elementSize == 0 &&
+        offset <= arrayBuffer->ByteLength() &&
+        count <= (arrayBuffer->ByteLength() - offset) / elementSize) {
+      switch (type) {
+        case JS::Scalar::Int8:
+          view = v8::Int8Array::New(arrayBuffer, offset, count);
+          break;
+        case JS::Scalar::Uint8:
+          view = v8::Uint8Array::New(arrayBuffer, offset, count);
+          break;
+        case JS::Scalar::Uint8Clamped:
+          view = v8::Uint8ClampedArray::New(arrayBuffer, offset, count);
+          break;
+        case JS::Scalar::Int16:
+          view = v8::Int16Array::New(arrayBuffer, offset, count);
+          break;
+        case JS::Scalar::Uint16:
+          view = v8::Uint16Array::New(arrayBuffer, offset, count);
+          break;
+        case JS::Scalar::Int32:
+          view = v8::Int32Array::New(arrayBuffer, offset, count);
+          break;
+        case JS::Scalar::Uint32:
+          view = v8::Uint32Array::New(arrayBuffer, offset, count);
+          break;
+        case JS::Scalar::Float16:
+          view = v8::Float16Array::New(arrayBuffer, offset, count);
+          break;
+        case JS::Scalar::Float32:
+          view = v8::Float32Array::New(arrayBuffer, offset, count);
+          break;
+        case JS::Scalar::Float64:
+          view = v8::Float64Array::New(arrayBuffer, offset, count);
+          break;
+        case JS::Scalar::BigInt64:
+          view = v8::BigInt64Array::New(arrayBuffer, offset, count);
+          break;
+        case JS::Scalar::BigUint64:
+          view = v8::BigUint64Array::New(arrayBuffer, offset, count);
+          break;
+        default:
+          break;
+      }
+    }
+    if (!view.IsEmpty()) {
+      *aVp = view;
+      allObjs[placeholderIndex] = *aVp;
+      return true;
+    }
   }
   JS::RootedObject buffer(cx, BufferObjectFromV8(cx, v.As<v8::Object>()));
   int64_t length = isAutoLength ? -1 : int64_t(aNelems);

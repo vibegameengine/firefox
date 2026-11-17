@@ -391,6 +391,9 @@ JS::Scalar::Type ScalarOf(v8::Local<v8::Value> aValue) {
   if (aValue->IsUint32Array()) {
     return JS::Scalar::Uint32;
   }
+  if (aValue->IsFloat16Array()) {
+    return JS::Scalar::Float16;
+  }
   if (aValue->IsFloat32Array()) {
     return JS::Scalar::Float32;
   }

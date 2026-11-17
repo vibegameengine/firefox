@@ -251,6 +251,7 @@ CellTail* TailOf(js::gc::Cell* aCell, JS::TraceKind aKind);
 ObjectCell* NewObjectCell(JSContext* aCx, Shape* aShape,
                           v8::Local<v8::Object> aObject, bool aAnchored);
 JSObject* ObjectFromV8(JSContext* aCx, v8::Local<v8::Object> aObject);
+JSObject* ExistingObjectFromV8(JSContext* aCx, v8::Local<v8::Object> aObject);
 v8::Local<v8::Object> ToV8(JSContext* aCx, JSObject* aObj);
 
 JSString* StringFromV8(JSContext* aCx, v8::Local<v8::String> aString);

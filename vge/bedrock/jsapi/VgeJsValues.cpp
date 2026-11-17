@@ -151,7 +151,7 @@ ObjectCell* NewObjectCell(JSContext* aCx, Shape* aShape,
   return cell;
 }
 
-JSObject* ObjectFromV8(JSContext* aCx, v8::Local<v8::Object> aObject) {
+JSObject* ExistingObjectFromV8(JSContext* aCx, v8::Local<v8::Object> aObject) {
   if (aObject.IsEmpty()) {
     return nullptr;
   }
@@ -161,6 +161,16 @@ JSObject* ObjectFromV8(JSContext* aCx, v8::Local<v8::Object> aObject) {
     if (ObjectCell* cell = CellOfExternal(aObject, existing)) {
       return cell->asObject();
     }
+  }
+  return nullptr;
+}
+
+JSObject* ObjectFromV8(JSContext* aCx, v8::Local<v8::Object> aObject) {
+  if (aObject.IsEmpty()) {
+    return nullptr;
+  }
+  if (JSObject* existing = ExistingObjectFromV8(aCx, aObject)) {
+    return existing;
   }
   JS::Realm* realm = aCx->realm();
   v8::Local<v8::Context> creation;
