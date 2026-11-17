@@ -131,7 +131,7 @@ def main():
         env["MOZ_PROFILER_STARTUP"] = "1"
         env["MOZ_PROFILER_STARTUP_ENTRIES"] = "16000000"
         env["MOZ_PROFILER_STARTUP_INTERVAL"] = "4"
-        env["MOZ_PROFILER_STARTUP_FEATURES"] = "stackwalk,nativeallocations" if args.alloc else "stackwalk"
+        env.setdefault("MOZ_PROFILER_STARTUP_FEATURES", "stackwalk,nativeallocations" if args.alloc else "stackwalk")
         env["MOZ_PROFILER_STARTUP_FILTERS"] = "GeckoMain,Compositor,Renderer,WRRenderBackend"
         env["VGE_PROFILE"] = str(RESULTS / f"{args.label}.profile.json").replace("/", "\\")
         env["VGE_PROFILE_DELAY"] = str(max(args.seconds - 8, 5))
