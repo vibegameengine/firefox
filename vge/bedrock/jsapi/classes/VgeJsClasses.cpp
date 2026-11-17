@@ -620,6 +620,9 @@ void AnchorCellOn(JSContext* aCx, ObjectCell* aCell,
   if (!aCell->tail.anchor) {
     aCell->tail.anchor = cppgc::MakeGarbageCollected<Anchor>(
         aCx->isolate->GetCppHeap()->GetAllocationHandle(), aCell);
+    if (!aCell->tail.handle.IsEmpty() && aCell->tail.handle.IsWeak()) {
+      MakeCellWeak(&aCell->tail);
+    }
   }
   if (aHolder->InternalFieldCount() == 2) {
     aHolder->SetAlignedPointerInInternalField(

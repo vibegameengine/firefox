@@ -24,28 +24,7 @@ void BindCellHandle(JSContext* aCx, CellTail* aTail, v8::Local<v8::Value> aValue
   aTail->handle.Reset(aCx->isolate, aValue);
   SetTraced(aCx->isolate, aTail, aValue);
   if (!aStrong) {
-    aTail->handle.SetWeak(
-        aTail,
-        [](const v8::WeakCallbackInfo<CellTail>& aInfo) {
-          CellTail* tail = aInfo.GetParameter();
-          tail->handle.Reset();
-          if (tail->anchor) {
-            NoteDeadAnchoredCell(tail);
-            return;
-          }
-          if (tail->kind == CellKind::Object) {
-            FreeObjectCell(reinterpret_cast<ObjectCell*>(
-                reinterpret_cast<uint8_t*>(tail) - offsetof(ObjectCell, tail)));
-            return;
-          }
-          StringCell* cell = reinterpret_cast<StringCell*>(
-              reinterpret_cast<uint8_t*>(tail) - offsetof(StringCell, tail));
-          if (tail->kind == CellKind::String) {
-            FreeStringChars(cell);
-          }
-          FreeCell(cell, sizeof(StringCell));
-        },
-        v8::WeakCallbackType::kParameter);
+    MakeCellWeak(aTail);
     aCx->runtime->youngTails.insert(aTail);
   }
 }

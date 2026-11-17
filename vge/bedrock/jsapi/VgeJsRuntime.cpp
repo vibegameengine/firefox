@@ -120,8 +120,65 @@ void WeakCellCallback(const v8::WeakCallbackInfo<CellTail>& aInfo) {
 }
 
 void MakeWeak(CellTail* aTail) {
-  aTail->handle.SetWeak(aTail, WeakCellCallback,
-                        v8::WeakCallbackType::kParameter);
+  if (aTail->anchor) {
+    aTail->handle.SetWeak(aTail, WeakCellCallback,
+                          v8::WeakCallbackType::kParameter);
+    if (JSRuntime* rt = Runtime()) {
+      rt->phantomTails.erase(aTail);
+    }
+    return;
+  }
+  aTail->handle.SetWeak();
+  if (JSRuntime* rt = Runtime()) {
+    rt->phantomTails.insert(aTail);
+  }
+}
+
+void FreeDeadCell(CellTail* aTail) {
+  if (aTail->kind == CellKind::Object) {
+    FreeObjectCell(reinterpret_cast<ObjectCell*>(
+        reinterpret_cast<uint8_t*>(aTail) - offsetof(ObjectCell, tail)));
+    return;
+  }
+  StringCell* cell = reinterpret_cast<StringCell*>(
+      reinterpret_cast<uint8_t*>(aTail) - offsetof(StringCell, tail));
+  if (aTail->kind == CellKind::String) {
+    FreeStringChars(cell);
+  }
+  FreeCell(cell, sizeof(StringCell));
+}
+
+void SweepPhantomCells(JSRuntime* aRuntime) {
+  aRuntime->phantomSweepPosted = false;
+  std::vector<CellTail*> dead;
+  for (CellTail* tail : aRuntime->phantomTails) {
+    if (tail->handle.IsEmpty() && !tail->anchor) {
+      dead.push_back(tail);
+    }
+  }
+  for (CellTail* tail : dead) {
+    aRuntime->phantomTails.erase(tail);
+    FreeDeadCell(tail);
+  }
+  DrainDeferredObjectFrees(aRuntime, SIZE_MAX);
+}
+
+class PhantomSweepTask final : public v8::Task {
+ public:
+  explicit PhantomSweepTask(JSRuntime* aRuntime) : mRuntime(aRuntime) {}
+  void Run() override { SweepPhantomCells(mRuntime); }
+
+ private:
+  JSRuntime* mRuntime;
+};
+
+void SchedulePhantomSweep(JSRuntime* aRuntime) {
+  if (aRuntime->phantomSweepPosted || aRuntime->phantomTails.empty()) {
+    return;
+  }
+  aRuntime->phantomSweepPosted = true;
+  sPlatform->GetForegroundTaskRunner(aRuntime->isolate)
+      ->PostTask(std::make_unique<PhantomSweepTask>(aRuntime));
 }
 
 void TraceStackRoots(JSContext* aCx, JSTracer* aTracer) {
@@ -378,6 +435,7 @@ void GCEpilogue(v8::Isolate* aIsolate, v8::GCType aType,
   }
   RefreshTracedNodes(rt);
   ReleaseYoungCells(rt);
+  SchedulePhantomSweep(rt);
   if (!rt->inGC) {
     return;
   }
@@ -433,6 +491,8 @@ void SetTraced(v8::Isolate* aIsolate, CellTail* aTail,
   Runtime()->tracedTails.insert(aTail);
 }
 
+void MakeCellWeak(CellTail* aTail) { MakeWeak(aTail); }
+
 void NoteDeadAnchoredCell(CellTail* aTail) {
   Runtime()->deadAnchored.push_back(reinterpret_cast<ObjectCell*>(
       reinterpret_cast<uint8_t*>(aTail) - offsetof(ObjectCell, tail)));
@@ -444,6 +504,7 @@ void ForgetTraced(CellTail* aTail) {
   if (JSRuntime* rt = Runtime()) {
     rt->tracedTails.erase(aTail);
     rt->youngTails.erase(aTail);
+    rt->phantomTails.erase(aTail);
   }
 }
 

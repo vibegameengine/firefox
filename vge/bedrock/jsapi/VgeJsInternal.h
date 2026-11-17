@@ -150,6 +150,7 @@ void SetTraced(v8::Isolate* aIsolate, CellTail* aTail,
                v8::Local<v8::Value> aValue);
 void ForgetTraced(CellTail* aTail);
 void NoteDeadAnchoredCell(CellTail* aTail);
+void MakeCellWeak(CellTail* aTail);
 JSString* AtomFromV8(JSContext* aCx, v8::Local<v8::String> aString);
 JSString* AtomizeCell(JSContext* aCx, JSString* aStr);
 
@@ -238,6 +239,8 @@ struct JSRuntime {
   std::vector<vge::jsapi::CellTail*> strongThisGC;
   std::unordered_set<vge::jsapi::CellTail*> tracedTails;
   std::unordered_set<vge::jsapi::CellTail*> youngTails;
+  std::unordered_set<vge::jsapi::CellTail*> phantomTails;
+  bool phantomSweepPosted = false;
   uint8_t tracedEpoch = 1;
   std::vector<JS::Realm*> realms;
   std::vector<JS::Realm*> dyingRealms;
