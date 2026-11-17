@@ -129,7 +129,6 @@ struct Shape {
 Shape* ShapeFor(const JSClass* aClass, JS::Realm* aRealm);
 
 extern const JSClass ArrayClass;
-extern const uint16_t kWrapperEmbedderId;
 
 namespace buffers {
 const JSClass* ClassForV8(v8::Local<v8::Object> aObject);

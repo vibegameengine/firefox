@@ -7,7 +7,6 @@
 
 namespace vge::jsapi {
 
-alignas(8) const uint16_t kWrapperEmbedderId = 0x5647;
 
 namespace {
 

@@ -26,12 +26,6 @@ namespace vge::jsapi {
 
 constexpr int kRealmEmbedderIndex = 24;
 
-struct alignas(8) WrapperTypeTag {
-  uint16_t embedderId;
-};
-
-extern const WrapperTypeTag kWrapperTypeTag;
-
 extern const JSClass FunctionClass;
 extern const JSClass FunctionExtendedClass;
 extern const JSClass PlainObjectClass;

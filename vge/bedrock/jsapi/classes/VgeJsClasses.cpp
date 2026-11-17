@@ -18,7 +18,6 @@ namespace vge::jsapi {
 
 extern const JSClass SavedFrameClass;
 
-const WrapperTypeTag kWrapperTypeTag = {kWrapperEmbedderId};
 
 const JSClass PlainObjectClass = {"Object",
                                   JSCLASS_HAS_CACHED_PROTO(JSProto_Object)};
@@ -623,13 +622,6 @@ void AnchorCellOn(JSContext* aCx, ObjectCell* aCell,
       MakeCellWeak(&aCell->tail);
     }
   }
-  if (aHolder->InternalFieldCount() == 2) {
-    aHolder->SetAlignedPointerInInternalField(
-        0, const_cast<WrapperTypeTag*>(&kWrapperTypeTag),
-        v8::kEmbedderDataTypeTagDefault);
-    aHolder->SetAlignedPointerInInternalField(1, aCell->tail.anchor,
-                                              v8::kEmbedderDataTypeTagDefault);
-  }
   v8::Object::Wrap(aCx->isolate, aHolder, aCell->tail.anchor, kAnchorTag);
   aCell->tail.anchor->SetWrapper(aCx->isolate, aHolder);
 }
@@ -728,8 +720,6 @@ JSObject* NewClassObject(JSContext* aCx, const JSClass* aClass,
   }
   Shape* shape = ShapeFor(aClass, aCx->realm());
   ObjectCell* cell = NewObjectCell(aCx, shape, object, true);
-  object->SetAlignedPointerInInternalField(
-      0, const_cast<WrapperTypeTag*>(&kWrapperTypeTag), v8::kEmbedderDataTypeTagDefault);
   return cell->asObject();
 }
 

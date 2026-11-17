@@ -673,9 +673,6 @@ JSObject* JS_NewGlobalObject(JSContext* aCx, const JSClass* aClass,
   v8::Local<v8::Object> inner =
       v8::InnerGlobalOfProxy(isolate, proxy).As<v8::Object>();
   ObjectCell* cell = NewObjectCell(aCx, ShapeFor(aClass, realm), proxy, true);
-  proxy->SetAlignedPointerInInternalField(
-      0, const_cast<WrapperTypeTag*>(&kWrapperTypeTag),
-      v8::kEmbedderDataTypeTagDefault);
   inner
       ->SetPrivate(ctx, rt->cellKey.Get(isolate),
                    v8::External::New(isolate, cell,

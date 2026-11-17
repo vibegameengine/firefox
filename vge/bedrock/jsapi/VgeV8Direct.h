@@ -12,9 +12,6 @@
 
 namespace vge::jsapi {
 
-struct WrapperTypeTag;
-extern const WrapperTypeTag kWrapperTypeTag;
-
 using DirectInfo = v8::FunctionCallbackInfo<v8::Value>;
 
 void DirectSlowPath(const DirectInfo& aInfo);
@@ -25,12 +22,11 @@ inline ObjectCell* DirectCell(v8::Local<v8::Value> aValue) {
     return nullptr;
   }
   v8::Local<v8::Object> object = aValue.As<v8::Object>();
-  if (object->InternalFieldCount() != 2 ||
-      object->GetAlignedPointerFromInternalField(0, v8::kEmbedderDataTypeTagDefault) != &kWrapperTypeTag) {
+  if (object->InternalFieldCount() != 2) {
     return nullptr;
   }
   Anchor* anchor =
-      static_cast<Anchor*>(object->GetAlignedPointerFromInternalField(1, v8::kEmbedderDataTypeTagDefault));
+      v8::Object::Unwrap<kAnchorTag, Anchor>(MainIsolate(), object);
   return anchor ? anchor->Cell() : nullptr;
 }
 
@@ -57,8 +53,8 @@ class DirectFrame {
  public:
   explicit DirectFrame(const DirectInfo& aInfo)
       : mCx(CurrentContext()), mOld(mCx->realm()) {
-    Anchor* anchor = static_cast<Anchor*>(
-        aInfo.Data().As<v8::Object>()->GetAlignedPointerFromInternalField(1, v8::kEmbedderDataTypeTagDefault));
+    Anchor* anchor = v8::Object::Unwrap<kAnchorTag, Anchor>(
+        mCx->isolate, aInfo.Data().As<v8::Object>());
     JS::Realm* realm = anchor->Cell()->shape->base.realm;
     mEntered = realm != mOld;
     if (mEntered) {

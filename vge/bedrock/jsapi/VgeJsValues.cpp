@@ -142,9 +142,6 @@ ObjectCell* NewObjectCell(JSContext* aCx, Shape* aShape,
     Anchor* anchor = cppgc::MakeGarbageCollected<Anchor>(
         aCx->isolate->GetCppHeap()->GetAllocationHandle(), cell);
     cell->tail.anchor = anchor;
-    aObject->SetAlignedPointerInInternalField(
-        0, const_cast<uint16_t*>(&kWrapperEmbedderId), v8::kEmbedderDataTypeTagDefault);
-    aObject->SetAlignedPointerInInternalField(1, anchor, v8::kEmbedderDataTypeTagDefault);
     v8::Object::Wrap(aCx->isolate, aObject, anchor, kAnchorTag);
     anchor->SetWrapper(aCx->isolate, aObject);
   }

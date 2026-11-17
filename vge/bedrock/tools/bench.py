@@ -173,6 +173,7 @@ def main():
                 while time.time() < deadline and process.poll() is None and not trace_path.exists():
                     time.sleep(2)
             crashed = process.poll() is not None
+            exit_code = process.returncode if crashed else None
             screen = None
             if watch:
                 watch.stop()
@@ -206,6 +207,7 @@ def main():
     result = {
         "label": args.label,
         "crashed": crashed,
+        "exit_code": exit_code,
         "memory": memory,
         "video_mb": video,
         "frames": parse_frames(text),
