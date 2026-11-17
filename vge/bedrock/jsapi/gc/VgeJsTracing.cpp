@@ -262,32 +262,7 @@ bool IsGray(js::gc::Cell* aCell) {
 }
 
 void TraceObjectCellChildren(JSTracer* aTracer, ObjectCell* aCell) {
-  Shape* shape = aCell->shape;
-  if (!shape) {
-    return;
-  }
-  JS::Value* slots = shape->isProxy
-                         ? &aCell->proxyData()->values()->privateSlot
-                         : aCell->fixedSlots();
-  size_t count = shape->isProxy
-                     ? shape->reservedSlots + 1
-                     : std::min<size_t>(shape->reservedSlots, kFixedSlots);
-  for (size_t i = 0; i < count; i++) {
-    if (slots[i].isGCThing()) {
-      js::gc::TraceExternalEdge(aTracer, &slots[i], "slot");
-    }
-  }
-  if (shape->isProxy && aCell->proxyData()->expando) {
-    js::gc::TraceExternalEdge(aTracer, &aCell->proxyData()->expando,
-                              "expando");
-  }
-  const JSClass* clasp = shape->base.clasp;
-  if (clasp && clasp->hasTrace()) {
-    clasp->doTrace(aTracer, aCell->asObject());
-  }
-  if (shape->isProxy && aCell->proxyData()->handler) {
-    aCell->proxyData()->handler->trace(aTracer, aCell->asObject());
-  }
+  TraceAnchoredCell(aCell, aTracer);
 }
 
 void TraceCellChildren(JSTracer* aTracer, JS::GCCellPtr aThing) {

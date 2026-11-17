@@ -329,9 +329,7 @@ void MarkingBarrier(JS::GCCellPtr aThing) {
   if (!state->v8Marking) {
     return;
   }
-  v8::HandleScope scope(cx->isolate);
-  v8::Local<v8::Value> value = tail->handle.Get(cx->isolate);
-  SetTraced(cx->isolate, tail, value);
+  v8::MarkGlobalDuringMarking(cx->isolate, tail->handle);
 }
 
 }

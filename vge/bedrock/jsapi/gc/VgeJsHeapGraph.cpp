@@ -278,8 +278,8 @@ struct CellSnapshot {
 };
 
 struct GrayInput {
-  std::vector<uintptr_t> objects;
-  std::vector<v8::GrayMarkingEdge> edges;
+  std::vector<std::vector<uintptr_t>> objectChunks;
+  std::vector<std::vector<v8::GrayMarkingEdge>> edgeChunks;
   std::vector<uintptr_t> tables;
   std::vector<v8::GrayMarkingEphemeron> ephemerons;
   std::vector<v8::GrayMarkingWeakRef> weakRefs;
@@ -389,14 +389,24 @@ GrayResult BuildGrayResult(GrayInput&& aIn) {
   }
   aIn.cellChunks.clear();
 
-  AddressIndex gray(aIn.objects.size());
+  size_t recorded = 0;
+  for (const std::vector<uintptr_t>& chunk : aIn.objectChunks) {
+    recorded += chunk.size();
+  }
+  size_t recordedEdges = 0;
+  for (const std::vector<v8::GrayMarkingEdge>& chunk : aIn.edgeChunks) {
+    recordedEdges += chunk.size();
+  }
+  AddressIndex gray(recorded);
   uint32_t nodeCount = 0;
-  for (uintptr_t address : aIn.objects) {
-    if (gray.Insert(address, nodeCount)) {
-      aIn.objects[nodeCount++] = address;
+  for (const std::vector<uintptr_t>& chunk : aIn.objectChunks) {
+    for (uintptr_t address : chunk) {
+      if (gray.Insert(address, nodeCount)) {
+        nodeCount++;
+      }
     }
   }
-  aIn.objects.resize(nodeCount);
+  aIn.objectChunks = {};
 
   const bool needCells = !aIn.ephemerons.empty() || !aIn.weakRefs.empty();
   AddressIndex cellIndex(needCells ? aIn.cells.size() * 2 : 0);
@@ -431,29 +441,32 @@ GrayResult BuildGrayResult(GrayInput&& aIn) {
   std::vector<uintptr_t> tableOwner(aIn.tables.size(), 0);
   std::vector<uint32_t> fromIndex;
   std::vector<uint32_t> toIndex;
-  fromIndex.reserve(aIn.edges.size());
-  toIndex.reserve(aIn.edges.size());
-  for (const v8::GrayMarkingEdge& edge : aIn.edges) {
-    uint32_t from = gray.Find(edge.from);
-    if (from == kNone) {
-      continue;
-    }
-    uint32_t to = gray.Find(edge.to);
-    if (to == kNone) {
-      continue;
-    }
-    if (!aIn.tables.empty()) {
-      if (tables.Find(edge.from) != kNone) {
+  fromIndex.reserve(recordedEdges);
+  toIndex.reserve(recordedEdges);
+  for (const std::vector<v8::GrayMarkingEdge>& chunk : aIn.edgeChunks) {
+    for (const v8::GrayMarkingEdge& edge : chunk) {
+      uint32_t from = gray.Find(edge.from);
+      if (from == kNone) {
         continue;
       }
-      uint32_t table = tables.Find(edge.to);
-      if (table != kNone) {
-        tableOwner[table] = edge.from;
+      uint32_t to = gray.Find(edge.to);
+      if (to == kNone) {
+        continue;
       }
+      if (!aIn.tables.empty()) {
+        if (tables.Find(edge.from) != kNone) {
+          continue;
+        }
+        uint32_t table = tables.Find(edge.to);
+        if (table != kNone) {
+          tableOwner[table] = edge.from;
+        }
+      }
+      fromIndex.push_back(from);
+      toIndex.push_back(to);
     }
-    fromIndex.push_back(from);
-    toIndex.push_back(to);
   }
+  aIn.edgeChunks = {};
 
   auto cellOf = [&](uintptr_t aAddress) -> const CellSnapshot* {
     if (!aAddress) {
@@ -622,12 +635,15 @@ class CellGrayMarkingClient final : public v8::GrayMarkingClient {
     mozilla::TimeStamp start = mozilla::TimeStamp::Now();
     GrayInput input;
     size_t count = 0;
-    const uintptr_t* objects = aResult.GrayObjects(&count);
-    input.objects.assign(objects, objects + count);
-    const size_t nodeCount = count;
-    const v8::GrayMarkingEdge* edges = aResult.Edges(&count);
-    input.edges.assign(edges, edges + count);
-    const size_t edgeCount = count;
+    aResult.TakeRecords(&input.objectChunks, &input.edgeChunks);
+    size_t nodeCount = 0;
+    for (const std::vector<uintptr_t>& chunk : input.objectChunks) {
+      nodeCount += chunk.size();
+    }
+    size_t edgeCount = 0;
+    for (const std::vector<v8::GrayMarkingEdge>& chunk : input.edgeChunks) {
+      edgeCount += chunk.size();
+    }
     const uintptr_t* tables = aResult.EphemeronTables(&count);
     input.tables.assign(tables, tables + count);
     const v8::GrayMarkingEphemeron* ephemerons = aResult.Ephemerons(&count);
@@ -669,7 +685,7 @@ class CellGrayMarkingClient final : public v8::GrayMarkingClient {
               (snapped - copied).ToMilliseconds(), nodeCount, edgeCount,
               ephemeronCount, mState.runtime->objectCells.size(),
               snappedCount, mState.runtime->youngTails.size(),
-              mState.runtime->tracedTails.size(), GlobalHandlesKb(mState),
+              size_t(0), GlobalHandlesKb(mState),
               static_cast<long long>(gLiveStringCells.load()),
               static_cast<long long>(gCreatedStringCells.load()),
               AnchoredCells(mState), mState.runtime->phantomTails.size());

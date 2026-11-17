@@ -43,56 +43,6 @@ class RootMarker final : public JS::CallbackTracer {
   }
 };
 
-class SlotTracer final : public JS::CallbackTracer {
- public:
-  SlotTracer(JSRuntime* aRuntime, cppgc::Visitor* aVisitor)
-      : JS::CallbackTracer(aRuntime, JS::TracerKind::Callback,
-                           JS::WeakMapTraceAction::TraceKeysAndValues),
-        mVisitor(aVisitor),
-        mMarking(cppgc::subtle::HeapState::IsMarking(
-            aRuntime->cppHeap->GetHeapHandle())) {}
-
-  bool onChild(JS::GCCellPtr aThing, const char* aName) override {
-    CellTail* tail = TailOf(aThing.asCell(), aThing.kind());
-    if (!tail) {
-      return true;
-    }
-    if (!tail->traced.IsEmpty()) {
-      static_cast<v8::JSVisitor*>(mVisitor)->Trace(tail->traced);
-      if (mMarking) {
-        tail->tracedEpoch = runtime()->tracedEpoch;
-      }
-    }
-    return true;
-  }
-
- private:
-  cppgc::Visitor* mVisitor;
-  bool mMarking;
-};
-
-void RefreshTracedNodes(JSRuntime* aRuntime) {
-  uint8_t epoch = aRuntime->tracedEpoch;
-  v8::HandleScope scope(aRuntime->isolate);
-  std::vector<CellTail*> gone;
-  for (CellTail* tail : aRuntime->tracedTails) {
-    if (tail->tracedEpoch == epoch) {
-      continue;
-    }
-    new (&tail->traced) v8::TracedReference<v8::Value>();
-    tail->tracedEpoch = 0;
-    if (tail->handle.IsEmpty()) {
-      gone.push_back(tail);
-      continue;
-    }
-    tail->traced.Reset(aRuntime->isolate, tail->handle.Get(aRuntime->isolate));
-  }
-  for (CellTail* tail : gone) {
-    aRuntime->tracedTails.erase(tail);
-  }
-  aRuntime->tracedEpoch = epoch == UINT8_MAX ? 1 : epoch + 1;
-}
-
 void MakeWeak(CellTail* aTail) {
   if (aTail->anchor) {
     aTail->handle.SetWeak();
@@ -406,7 +356,6 @@ void GCEpilogue(v8::Isolate* aIsolate, v8::GCType aType,
   if (!(aType & v8::kGCTypeMarkSweepCompact)) {
     return;
   }
-  RefreshTracedNodes(rt);
   ReleaseYoungCells(rt);
   SchedulePhantomSweep(rt);
   if (!rt->inGC) {
@@ -457,13 +406,6 @@ void TraceEnteredRealmGlobals(JSRuntime* aRuntime, JSTracer* aTracer) {
   }
 }
 
-void SetTraced(v8::Isolate* aIsolate, CellTail* aTail,
-               v8::Local<v8::Value> aValue) {
-  aTail->traced.Reset(aIsolate, aValue);
-  aTail->tracedEpoch = 0;
-  Runtime()->tracedTails.insert(aTail);
-}
-
 void MakeCellWeak(CellTail* aTail) { MakeWeak(aTail); }
 
 void NoteDeadAnchoredCell(CellTail* aTail) {
@@ -471,11 +413,8 @@ void NoteDeadAnchoredCell(CellTail* aTail) {
       reinterpret_cast<uint8_t*>(aTail) - offsetof(ObjectCell, tail)));
 }
 
-void ForgetTraced(CellTail* aTail) {
-  new (&aTail->traced) v8::TracedReference<v8::Value>();
-  aTail->tracedEpoch = 0;
+void ForgetTail(CellTail* aTail) {
   if (JSRuntime* rt = Runtime()) {
-    rt->tracedTails.erase(aTail);
     rt->youngTails.erase(aTail);
     rt->phantomTails.erase(aTail);
   }
@@ -507,9 +446,8 @@ class GrayWrapperSlotTracer final : public JS::CallbackTracer {
 
   bool onChild(JS::GCCellPtr aThing, const char* aName) override {
     CellTail* tail = TailOf(aThing.asCell(), aThing.kind());
-    if (tail && !tail->traced.IsEmpty()) {
-      mMarker.Mark(tail->traced);
-      tail->tracedEpoch = runtime()->tracedEpoch;
+    if (tail && !tail->handle.IsEmpty()) {
+      mMarker.Mark(tail->handle);
     }
     return true;
   }
@@ -522,6 +460,9 @@ void TraceAnchoredCell(ObjectCell* aCell, JSTracer* aTracer) {
   ObjectCell* cell = aCell;
   JSTracer& tracer = *aTracer;
   Shape* shape = cell->shape;
+  if (!shape) {
+    return;
+  }
   JS::Value* slots = shape->isProxy
                          ? &cell->proxyData()->values()->privateSlot
                          : cell->fixedSlots();
@@ -542,17 +483,15 @@ void TraceAnchoredCell(ObjectCell* aCell, JSTracer* aTracer) {
     JS::TraceRoot(&tracer, &cell->proxyData()->expando, "expando");
   }
   const JSClass* clasp = shape->base.clasp;
-  if (clasp->hasTrace()) {
+  if (clasp && clasp->hasTrace()) {
     clasp->doTrace(&tracer, cell->asObject());
   }
-  if (shape->isProxy) {
+  if (shape->isProxy && cell->proxyData()->handler) {
     cell->proxyData()->handler->trace(&tracer, cell->asObject());
   }
 }
 
 void Anchor::Trace(cppgc::Visitor* aVisitor) const {
-  SlotTracer tracer(Runtime(), aVisitor);
-  TraceAnchoredCell(mCell, &tracer);
   static_cast<v8::JSVisitor*>(aVisitor)->Trace(mWrapper);
 }
 

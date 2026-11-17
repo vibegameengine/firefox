@@ -47,11 +47,9 @@ struct CellTail {
   CellKind kind;
   bool rootedThisGC;
   bool isAtom;
-  uint8_t tracedEpoch;
   bool classFinalized;
   uint32_t serial;
   v8::Global<v8::Value> handle;
-  v8::TracedReference<v8::Value> traced;
   Anchor* anchor;
   CellTail* nextFree;
 };
@@ -147,9 +145,8 @@ JSContext* CurrentContext();
 v8::Isolate* MainIsolate();
 v8::Platform* CurrentPlatform();
 void BindCellHandle(JSContext* aCx, CellTail* aTail, v8::Local<v8::Value> aValue, bool aStrong);
-void SetTraced(v8::Isolate* aIsolate, CellTail* aTail,
-               v8::Local<v8::Value> aValue);
-void ForgetTraced(CellTail* aTail);
+void ForgetTail(CellTail* aTail);
+void TraceAnchoredCell(ObjectCell* aCell, JSTracer* aTracer);
 void NoteDeadAnchoredCell(CellTail* aTail);
 void MakeCellWeak(CellTail* aTail);
 JSString* AtomFromV8(JSContext* aCx, v8::Local<v8::String> aString);
@@ -239,11 +236,9 @@ struct JSRuntime {
   const JSSecurityCallbacks* securityCallbacks = nullptr;
   const JSPrincipals* trustedPrincipals = nullptr;
   std::vector<vge::jsapi::CellTail*> strongThisGC;
-  std::unordered_set<vge::jsapi::CellTail*> tracedTails;
   std::unordered_set<vge::jsapi::CellTail*> youngTails;
   std::unordered_set<vge::jsapi::CellTail*> phantomTails;
   bool phantomSweepPosted = false;
-  uint8_t tracedEpoch = 1;
   std::vector<JS::Realm*> realms;
   std::vector<JS::Realm*> dyingRealms;
   std::unordered_set<vge::jsapi::ObjectCell*> objectCells;

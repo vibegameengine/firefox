@@ -468,8 +468,7 @@ void SlotWriteBarrier(JSContext* aCx, const JS::Value& aValue) {
   if (!tail || tail->handle.IsEmpty()) {
     return;
   }
-  v8::HandleScope scope(aCx->isolate);
-  SetTraced(aCx->isolate, tail, tail->handle.Get(aCx->isolate));
+  v8::MarkGlobalDuringMarking(aCx->isolate, tail->handle);
 }
 
 JS::Value* SlotAddress(JSObject* aObj, uint32_t aIndex) {

@@ -79,7 +79,7 @@ void FreeCell(void* aCell, size_t aSize) {
           ? &static_cast<ObjectCell*>(aCell)->tail
           : &static_cast<StringCell*>(aCell)->tail;
   tail->handle.~Global();
-  ForgetTraced(tail);
+  ForgetTail(tail);
   tail->nextFree = c.freeList;
   c.freeList = tail;
 }

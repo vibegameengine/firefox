@@ -29,12 +29,21 @@ snapshot. Chrome's whole pause on the same game is 3.5 ms; its marking is concur
   the gray worklist and a successful mark sets the gray bit first, then the mark bit.
 - Black `TryMarkAndPush` that finds an object marked and gray clears the gray bit (one winner)
   and pushes it to the reblack worklist. Reblack visits do not account live bytes again and
-  reset a large object's progress bar.
+  scan a large array with a progress tracker whole, in one visit.
+- A seq_cst fence sits between setting the gray bit and the mark bit, and between a failed black
+  mark and reading the gray bit, so a black marker that sees the mark also sees the gray bit.
+- Pending young allocations put on hold keep their color: separate on-hold lists for gray and
+  reblack entries, merged back into their own worklists.
 - Every marker thread drains black, then reblack, then gray. Gray visits record the object and
   its edges.
-- Ephemeron values are marked with the lesser color of table and key.
-- Marking barrier: the C++ barrier blackens a gray value; the RecordWrite builtin takes the slow
-  path for a marked value whose gray bit is set.
+- Ephemerons: a table visited gray marks values gray. A black table, or a key found marked later,
+  marks the value black. A pair whose value is marked gray stays unresolved, so a key reached
+  later turns the value black. Gray key with black table gives a black value (safe direction).
+- Marking barrier: the C++ barrier blackens a gray value. The RecordWrite builtin takes the slow
+  path for every marked value while the gray phase runs (bit 1 of the is_marking flag); an inline
+  gray-bit check is still to be written.
+- Embedded objects in code are always passed to the marker, so a black code object reblackens a
+  gray embedded object.
 - Gray phase starts when incremental marking would finalize for the first time in the cycle:
   the embedder marks gray roots, concurrent marking continues; finalize when both colors are
   drained.
@@ -43,7 +52,9 @@ snapshot. Chrome's whole pause on the same game is 3.5 ms; its marking is concur
   set, recorded edges, weak candidates.
 - Wrappers: cppgc has no color, so a DOM wrapper's anchor is traced by V8 itself through an
   embedder callback with the visitor's color, and V8 marks the anchor in cppgc without pushing
-  it for tracing.
+  it for tracing. The Wrap write barrier during marking goes the same way (black).
+- The cycle collector sees the same slot edges the marker follows: one traversal function for
+  both, fixed and dynamic slots.
 
 ## Embedder side (Bedrock jsapi)
 

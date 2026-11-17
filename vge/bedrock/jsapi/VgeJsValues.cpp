@@ -22,7 +22,6 @@ v8::Local<v8::Private> CellKey(JSContext* aCx) {
 void BindCellHandle(JSContext* aCx, CellTail* aTail, v8::Local<v8::Value> aValue,
                 bool aStrong) {
   aTail->handle.Reset(aCx->isolate, aValue);
-  SetTraced(aCx->isolate, aTail, aValue);
   if (!aStrong) {
     MakeCellWeak(aTail);
     aCx->runtime->youngTails.insert(aTail);
