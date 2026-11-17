@@ -111,6 +111,7 @@ def main():
     parser.add_argument("--trace", action="store_true")
     parser.add_argument("--profile", action="store_true")
     parser.add_argument("--gc", action="store_true")
+    parser.add_argument("--pauses", action="store_true")
     parser.add_argument("--alloc", action="store_true")
     parser.add_argument("--compare")
     parser.add_argument("--watch", action="store_true")
@@ -121,8 +122,9 @@ def main():
     log_path = RESULTS / f"{args.label}.log"
     env = dict(os.environ)
     env["VGE_FRAME_PROBE"] = str(PROBE).replace("/", "\\")
-    if args.gc:
+    if args.gc or args.pauses:
         env["VGE_V8_FLAGS"] = "--trace-gc-nvp"
+    if args.gc:
         env["VGE_GC_LOG"] = "1"
     trace_path = RESULTS / f"{args.label}.trace.txt"
     if args.profile:
