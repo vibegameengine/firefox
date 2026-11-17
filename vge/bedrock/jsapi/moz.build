@@ -23,6 +23,9 @@ OS_LIBS += [
     "winmm",
 ]
 
+if CONFIG["VGE_V8_PROFILE_RUNTIME"]:
+    OS_LIBS += [CONFIG["VGE_V8_PROFILE_RUNTIME"]]
+
 GeneratedFile("icudtl.dat", script="copy_icu_data.py", flags=[])
 
 FINAL_TARGET_FILES += ["!icudtl.dat"]

@@ -24,4 +24,24 @@ def vge_v8_dir(value):
 set_config("VGE_V8_DIR", vge_v8_dir)
 set_config("VGE_JSAPI_V8", True)
 
+option(
+    env="VGE_V8_PROFILE_RUNTIME",
+    nargs=1,
+    help="clang_rt.profile library linked in when wee8.lib is a PGO instrumented build",
+)
+
+
+@depends("VGE_V8_PROFILE_RUNTIME")
+@imports("os")
+def vge_v8_profile_runtime(value):
+    if not value:
+        return None
+    path = value[0]
+    if not os.path.isfile(path):
+        die("VGE_V8_PROFILE_RUNTIME does not exist: %s" % path)
+    return os.path.splitext(path)[0]
+
+
+set_config("VGE_V8_PROFILE_RUNTIME", vge_v8_profile_runtime)
+
 include("../../toolkit/moz.configure")
