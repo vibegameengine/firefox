@@ -1157,9 +1157,9 @@ bool JS::WeakMapPtr<JSObject*, JSObject*>::init(JSContext* cx) {
   impl->map.SetWeak();
   impl->get.SetWeak();
   impl->set.SetWeak();
-  impl->mapCell = ObjectFromV8(cx, map);
-  impl->getCell = ObjectFromV8(cx, get.As<v8::Object>());
-  impl->setCell = ObjectFromV8(cx, set.As<v8::Object>());
+  impl->mapCell = PinCell(ObjectFromV8(cx, map));
+  impl->getCell = PinCell(ObjectFromV8(cx, get.As<v8::Object>()));
+  impl->setCell = PinCell(ObjectFromV8(cx, set.As<v8::Object>()));
   ptr = impl;
   return true;
 }

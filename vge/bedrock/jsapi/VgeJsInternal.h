@@ -149,6 +149,9 @@ void BindCellHandle(JSContext* aCx, CellTail* aTail, v8::Local<v8::Value> aValue
 void ForgetTail(CellTail* aTail);
 constexpr uint16_t kCellHandleClassId = 0x5643;
 void TraceAnchoredCell(ObjectCell* aCell, JSTracer* aTracer);
+void DetachManagedObjectCell(JSContext* aCx, ObjectCell* aCell);
+JSObject* PinCell(JSObject* aObj);
+void ForgetWrapperKey(JSContext* aCx, JSObject* aTarget);
 void NoteDeadAnchoredCell(CellTail* aTail);
 void MakeCellWeak(CellTail* aTail);
 JSString* AtomFromV8(JSContext* aCx, v8::Local<v8::String> aString);
@@ -241,6 +244,8 @@ struct JSRuntime {
   std::unordered_set<vge::jsapi::CellTail*> youngTails;
   std::vector<vge::jsapi::CellTail*> deadTails;
   std::vector<vge::jsapi::StringCell*> managedStrings;
+  std::vector<vge::jsapi::ObjectCell*> managedObjects;
+  bool sweepingManaged = false;
   bool phantomSweepPosted = false;
   std::vector<JS::Realm*> realms;
   std::vector<JS::Realm*> dyingRealms;

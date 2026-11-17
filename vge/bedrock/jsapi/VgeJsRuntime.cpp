@@ -59,14 +59,14 @@ void FreeDeadCell(CellTail* aTail) {
   FreeCell(cell, sizeof(StringCell));
 }
 
-class ManagedStringMarker final : public JS::CallbackTracer {
+class ManagedCellMarker final : public JS::CallbackTracer {
  public:
-  explicit ManagedStringMarker(JSRuntime* aRuntime)
+  explicit ManagedCellMarker(JSRuntime* aRuntime)
       : JS::CallbackTracer(aRuntime, JS::TracerKind::Callback,
                            JS::WeakMapTraceAction::TraceKeysAndValues) {}
 
   bool onChild(JS::GCCellPtr aThing, const char* aName) override {
-    if (!aThing.is<JSString>()) {
+    if (!aThing.is<JSString>() && !aThing.is<JSObject>()) {
       return true;
     }
     CellTail* tail = TailOf(aThing.asCell(), aThing.kind());
@@ -80,19 +80,46 @@ class ManagedStringMarker final : public JS::CallbackTracer {
 void TraceAllRoots(JSRuntime* aRuntime, JSTracer* aTracer);
 void FreeDeadCell(CellTail* aTail);
 
-void SweepManagedStrings(JSRuntime* aRuntime) {
-  if (aRuntime->managedStrings.empty()) {
+void SweepManagedCells(JSRuntime* aRuntime) {
+  if (aRuntime->managedStrings.empty() && aRuntime->managedObjects.empty()) {
     return;
   }
-  ManagedStringMarker marker(aRuntime);
+  ManagedCellMarker marker(aRuntime);
   TraceAllRoots(aRuntime, &marker);
   if (aRuntime->grayRootTracer) {
     JS::SliceBudget budget = JS::SliceBudget::unlimited();
     aRuntime->grayRootTracer(&marker, budget, aRuntime->grayRootTracerData);
   }
   for (ObjectCell* cell : aRuntime->objectCells) {
-    TraceAnchoredCell(cell, &marker);
+    if (!cell->tail.classFinalized) {
+      TraceAnchoredCell(cell, &marker);
+    }
   }
+  if (!aRuntime->managedObjects.empty() && aRuntime->weakPointerSweep) {
+    aRuntime->sweepingManaged = true;
+    aRuntime->sweepingWeakPointers = true;
+    aRuntime->weakPointerSweep(aRuntime);
+    aRuntime->sweepingWeakPointers = false;
+    aRuntime->sweepingManaged = false;
+  }
+  std::vector<ObjectCell*>& objects = aRuntime->managedObjects;
+  size_t keptObjects = 0;
+  for (ObjectCell* cell : objects) {
+    if (!cell->tail.managed) {
+      continue;
+    }
+    if (cell->tail.marked) {
+      cell->tail.marked = false;
+      objects[keptObjects++] = cell;
+      continue;
+    }
+    if (aRuntime->mainContext) {
+      ForgetWrapperKey(aRuntime->mainContext, cell->asObject());
+      DetachManagedObjectCell(aRuntime->mainContext, cell);
+    }
+    FreeObjectCell(cell);
+  }
+  objects.resize(keptObjects);
   std::vector<StringCell*>& cells = aRuntime->managedStrings;
   size_t kept = 0;
   for (StringCell* cell : cells) {
@@ -108,7 +135,7 @@ void SweepManagedStrings(JSRuntime* aRuntime) {
 
 void SweepPhantomCells(JSRuntime* aRuntime) {
   aRuntime->phantomSweepPosted = false;
-  SweepManagedStrings(aRuntime);
+  SweepManagedCells(aRuntime);
   std::vector<CellTail*> dead;
   dead.swap(aRuntime->deadTails);
   for (CellTail* tail : dead) {
@@ -170,7 +197,8 @@ class PhantomSweepTask final : public v8::Task {
 
 void SchedulePhantomSweep(JSRuntime* aRuntime) {
   if (aRuntime->phantomSweepPosted ||
-      (aRuntime->deadTails.empty() && aRuntime->managedStrings.empty())) {
+      (aRuntime->deadTails.empty() && aRuntime->managedStrings.empty() &&
+       aRuntime->managedObjects.empty())) {
     return;
   }
   aRuntime->phantomSweepPosted = true;

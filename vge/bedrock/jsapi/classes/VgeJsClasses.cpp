@@ -615,6 +615,7 @@ v8::Local<v8::ObjectTemplate> HolderTemplate(JSContext* aCx) {
 
 void AnchorCellOn(JSContext* aCx, ObjectCell* aCell,
                   v8::Local<v8::Object> aHolder) {
+  aCell->tail.managed = false;
   if (!aCell->tail.anchor) {
     aCell->tail.anchor = cppgc::MakeGarbageCollected<Anchor>(
         aCx->isolate->GetCppHeap()->GetAllocationHandle(), aCell);

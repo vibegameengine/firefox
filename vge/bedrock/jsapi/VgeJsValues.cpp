@@ -171,7 +171,28 @@ JSObject* ObjectFromV8(JSContext* aCx, v8::Local<v8::Object> aObject) {
     }
   }
   Shape* shape = ShapeFor(ClassForScriptObject(aObject), realm);
-  return NewObjectCell(aCx, shape, aObject, false)->asObject();
+  ObjectCell* cell = NewObjectCell(aCx, shape, aObject, false);
+  cell->tail.managed = true;
+  aCx->runtime->managedObjects.push_back(cell);
+  return cell->asObject();
+}
+
+JSObject* PinCell(JSObject* aObj) {
+  if (aObj) {
+    ObjectCell::from(aObj)->tail.managed = false;
+  }
+  return aObj;
+}
+
+void DetachManagedObjectCell(JSContext* aCx, ObjectCell* aCell) {
+  if (aCell->tail.handle.IsEmpty()) {
+    return;
+  }
+  v8::HandleScope scope(aCx->isolate);
+  v8::Local<v8::Object> object =
+      aCell->tail.handle.Get(aCx->isolate).As<v8::Object>();
+  object->DeletePrivate(ContextForObject(aCx, object), CellKey(aCx)).Check();
+  aCell->tail.handle.Reset();
 }
 
 v8::Local<v8::Object> ToV8(JSContext* aCx, JSObject* aObj) {

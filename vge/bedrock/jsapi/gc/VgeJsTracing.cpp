@@ -198,7 +198,13 @@ CellTail* LiveTail(JS::GCCellPtr aThing) {
     return nullptr;
   }
   if (tail->managed) {
-    return tail;
+    JSRuntime* rt = Runtime();
+    if (rt && rt->sweepingManaged && !tail->marked) {
+      return nullptr;
+    }
+    if (tail->kind == CellKind::String) {
+      return tail;
+    }
   }
   if (tail->handle.IsEmpty()) {
     return nullptr;

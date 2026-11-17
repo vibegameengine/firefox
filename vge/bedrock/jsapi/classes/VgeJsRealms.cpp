@@ -422,11 +422,11 @@ void CaptureRealmIntrinsics(JSContext* aCx, JS::Realm* aRealm,
   }
   if (!extra.protos[JSProto_Object].IsEmpty()) {
     extra.objectProto =
-        ObjectFromV8(aCx, extra.protos[JSProto_Object].Get(isolate));
+        PinCell(ObjectFromV8(aCx, extra.protos[JSProto_Object].Get(isolate)));
   }
   if (!extra.protos[JSProto_Function].IsEmpty()) {
     extra.functionProto =
-        ObjectFromV8(aCx, extra.protos[JSProto_Function].Get(isolate));
+        PinCell(ObjectFromV8(aCx, extra.protos[JSProto_Function].Get(isolate)));
   }
   struct SelfHosted {
     const char* name;
@@ -1297,4 +1297,14 @@ js::AutoAssertNoContentJS::AutoAssertNoContentJS(JSContext* aCx)
 
 js::AutoAssertNoContentJS::~AutoAssertNoContentJS() {
   State(context_).allowContentJS = prevAllowContentJS_;
+}
+
+namespace vge::jsapi {
+
+void ForgetWrapperKey(JSContext* aCx, JSObject* aTarget) {
+  for (auto& [compartment, extra] : State(aCx).compartments) {
+    extra->wrappers.erase(aTarget);
+  }
+}
+
 }
