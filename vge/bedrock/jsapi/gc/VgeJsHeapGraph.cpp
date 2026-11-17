@@ -540,20 +540,6 @@ void EnsureGrayBits(GcState& aState) {
 
 namespace {
 
-size_t AnchoredCells(GcState& aState) {
-  size_t count = 0;
-  for (ObjectCell* cell : aState.runtime->objectCells) {
-    count += cell->tail.anchor != nullptr;
-  }
-  return count;
-}
-
-size_t GlobalHandlesKb(GcState& aState) {
-  v8::HeapStatistics stats;
-  aState.runtime->isolate->GetHeapStatistics(&stats);
-  return stats.used_global_handles_size() / 1024;
-}
-
 class CellGrayMarkingClient final : public v8::GrayMarkingClient {
  public:
   explicit CellGrayMarkingClient(GcState& aState) : mState(aState) {}
@@ -641,18 +627,16 @@ class CellGrayMarkingClient final : public v8::GrayMarkingClient {
       fprintf(stderr,
               "VGEGRAY roots %.3f closure %.3f client %.3f copy %.3f snap "
               "%.3f gray %zu edges %zu ephemerons %zu cells %zu snapped %zu "
-              "young %zu traced %zu globals_kb %zu strings %lld "
-              "created_strings %lld anchored %zu phantom %zu\n",
+              "young %zu strings %lld created_strings %lld dead %zu\n",
               mRootsMs, (start - mRootsEnd).ToMilliseconds(),
               (end - start).ToMilliseconds(),
               (copied - start).ToMilliseconds(),
               (snapped - copied).ToMilliseconds(), nodeCount, edgeCount,
               ephemeronCount, mState.runtime->objectCells.size(),
               snappedCount, mState.runtime->youngTails.size(),
-              size_t(0), GlobalHandlesKb(mState),
               static_cast<long long>(gLiveStringCells.load()),
               static_cast<long long>(gCreatedStringCells.load()),
-              AnchoredCells(mState), mState.runtime->deadTails.size());
+              mState.runtime->deadTails.size());
       fflush(stderr);
     }
   }
