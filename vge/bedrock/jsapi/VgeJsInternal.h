@@ -146,6 +146,7 @@ v8::Isolate* MainIsolate();
 v8::Platform* CurrentPlatform();
 void BindCellHandle(JSContext* aCx, CellTail* aTail, v8::Local<v8::Value> aValue, bool aStrong);
 void ForgetTail(CellTail* aTail);
+constexpr uint16_t kCellHandleClassId = 0x5643;
 void TraceAnchoredCell(ObjectCell* aCell, JSTracer* aTracer);
 void NoteDeadAnchoredCell(CellTail* aTail);
 void MakeCellWeak(CellTail* aTail);
@@ -237,7 +238,7 @@ struct JSRuntime {
   const JSPrincipals* trustedPrincipals = nullptr;
   std::vector<vge::jsapi::CellTail*> strongThisGC;
   std::unordered_set<vge::jsapi::CellTail*> youngTails;
-  std::unordered_set<vge::jsapi::CellTail*> phantomTails;
+  std::vector<vge::jsapi::CellTail*> deadTails;
   bool phantomSweepPosted = false;
   std::vector<JS::Realm*> realms;
   std::vector<JS::Realm*> dyingRealms;

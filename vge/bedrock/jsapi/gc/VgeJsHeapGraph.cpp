@@ -283,56 +283,8 @@ struct GrayInput {
   std::vector<uintptr_t> tables;
   std::vector<v8::GrayMarkingEphemeron> ephemerons;
   std::vector<v8::GrayMarkingWeakRef> weakRefs;
-  std::vector<std::vector<CellSnapshot>> cellChunks;
   std::vector<CellSnapshot> cells;
 };
-
-void SnapshotBuckets(const std::unordered_set<ObjectCell*>& aCells,
-                     size_t aBegin, size_t aEnd,
-                     const v8::GrayMarkingResult& aResult,
-                     std::vector<CellSnapshot>& aOut) {
-  for (size_t bucket = aBegin; bucket < aEnd; bucket++) {
-    for (auto it = aCells.begin(bucket); it != aCells.end(bucket); ++it) {
-      ObjectCell* cell = *it;
-      if (cell->tail.handle.IsEmpty()) {
-        continue;
-      }
-      uintptr_t address = aResult.AddressOf(cell->tail.handle);
-      if (!aResult.IsMarked(address)) {
-        continue;
-      }
-      uintptr_t inner = 0;
-      const JSClass* clasp = cell->shape ? cell->shape->base.clasp : nullptr;
-      if (clasp && (clasp->flags & JSCLASS_IS_GLOBAL)) {
-        inner = aResult.InnerGlobalOfProxy(address);
-      }
-      aOut.push_back({JS::GCCellPtr(cell->asObject()), address, inner});
-    }
-  }
-}
-
-std::vector<std::vector<CellSnapshot>> SnapshotCells(
-    const std::unordered_set<ObjectCell*>& aCells,
-    const v8::GrayMarkingResult& aResult) {
-  constexpr size_t kCellsPerChunk = 2048;
-  size_t buckets = aCells.bucket_count();
-  size_t chunks = std::clamp<size_t>(aCells.size() / kCellsPerChunk, 1, 8);
-  std::vector<std::vector<CellSnapshot>> out(chunks);
-  std::vector<std::future<void>> workers;
-  for (size_t c = 1; c < chunks; c++) {
-    workers.push_back(std::async(std::launch::async, [&, c] {
-      out[c].reserve(aCells.size() / chunks);
-      SnapshotBuckets(aCells, buckets * c / chunks,
-                      buckets * (c + 1) / chunks, aResult, out[c]);
-    }));
-  }
-  out[0].reserve(aCells.size() / chunks);
-  SnapshotBuckets(aCells, 0, buckets / chunks, aResult, out[0]);
-  for (std::future<void>& worker : workers) {
-    worker.wait();
-  }
-  return out;
-}
 
 JSObject* ObjectOf(const CellSnapshot& aCell) {
   return reinterpret_cast<JSObject*>(aCell.thing.asCell());
@@ -383,11 +335,6 @@ GrayResult BuildGrayResult(GrayInput&& aIn) {
   mozilla::TimeStamp start = mozilla::TimeStamp::Now();
   GrayResult out;
   constexpr uint32_t kNone = AddressIndex::kNone;
-
-  for (std::vector<CellSnapshot>& chunk : aIn.cellChunks) {
-    aIn.cells.insert(aIn.cells.end(), chunk.begin(), chunk.end());
-  }
-  aIn.cellChunks.clear();
 
   size_t recorded = 0;
   for (const std::vector<uintptr_t>& chunk : aIn.objectChunks) {
@@ -626,6 +573,8 @@ class CellGrayMarkingClient final : public v8::GrayMarkingClient {
 
   bool TracesWrappers() const override { return true; }
 
+  uint16_t GrayHandleClassId() const override { return kCellHandleClassId; }
+
   void TraceWrapper(void* aWrappable, v8::GrayWrapperMarker& aMarker) override {
     static_cast<Anchor*>(static_cast<v8::Object::Wrappable*>(aWrappable))
         ->TraceGray(mState.runtime, aMarker);
@@ -652,12 +601,27 @@ class CellGrayMarkingClient final : public v8::GrayMarkingClient {
     const v8::GrayMarkingWeakRef* refs = aResult.WeakRefs(&count);
     input.weakRefs.assign(refs, refs + count);
     mozilla::TimeStamp copied = mozilla::TimeStamp::Now();
-    input.cellChunks = SnapshotCells(mState.runtime->objectCells, aResult);
-    mozilla::TimeStamp snapped = mozilla::TimeStamp::Now();
-    size_t snappedCount = 0;
-    for (const std::vector<CellSnapshot>& chunk : input.cellChunks) {
-      snappedCount += chunk.size();
+    size_t handleCount = 0;
+    const v8::GrayMarkingHandle* handles = aResult.GrayHandles(&handleCount);
+    input.cells.reserve(handleCount);
+    for (size_t i = 0; i < handleCount; i++) {
+      CellTail* tail = reinterpret_cast<CellTail*>(
+          handles[i].global - offsetof(CellTail, handle));
+      if (tail->kind != CellKind::Object) {
+        continue;
+      }
+      ObjectCell* cell = reinterpret_cast<ObjectCell*>(
+          reinterpret_cast<uint8_t*>(tail) - offsetof(ObjectCell, tail));
+      uintptr_t inner = 0;
+      const JSClass* clasp = cell->shape ? cell->shape->base.clasp : nullptr;
+      if (clasp && (clasp->flags & JSCLASS_IS_GLOBAL)) {
+        inner = aResult.InnerGlobalOfProxy(handles[i].object);
+      }
+      input.cells.push_back(
+          {JS::GCCellPtr(cell->asObject()), handles[i].object, inner});
     }
+    mozilla::TimeStamp snapped = mozilla::TimeStamp::Now();
+    const size_t snappedCount = input.cells.size();
     JSRuntime* rt = mState.runtime;
     uint64_t epoch = ++mState.grayEpoch;
     std::shared_ptr<v8::TaskRunner> runner =
@@ -688,7 +652,7 @@ class CellGrayMarkingClient final : public v8::GrayMarkingClient {
               size_t(0), GlobalHandlesKb(mState),
               static_cast<long long>(gLiveStringCells.load()),
               static_cast<long long>(gCreatedStringCells.load()),
-              AnchoredCells(mState), mState.runtime->phantomTails.size());
+              AnchoredCells(mState), mState.runtime->deadTails.size());
       fflush(stderr);
     }
   }

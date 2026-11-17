@@ -1,0 +1,44 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>cached slot wrappers</title>
+<script>
+const controllers = [];
+let failures = 0;
+let checks = 0;
+let frame = 0;
+function churn() {
+  const junk = [];
+  for (let i = 0; i < 30000; i++) {
+    junk.push({ i, s: "x" + i });
+  }
+  return junk.length;
+}
+function tick() {
+  frame++;
+  for (let i = 0; i < 100; i++) {
+    const c = new AbortController();
+    void c.signal;
+    controllers.push(c);
+  }
+  if (controllers.length > 4000) controllers.splice(0, 100);
+  for (let i = 0; i < controllers.length; i += 7) {
+    checks++;
+    const s = controllers[i].signal;
+    if (typeof s !== "object" || s === null) {
+      failures++;
+      if (failures < 5) console.log("cached-slot failure frame " + frame + " index " + i + " type " + typeof s);
+    }
+  }
+  try {
+    const a = controllers[0], b = controllers[controllers.length - 1];
+    AbortSignal.any([a.signal, b.signal]);
+  } catch (e) {
+    failures++;
+    if (failures < 5) console.log("cached-slot any failure " + e);
+  }
+  churn();
+  if (frame % 60 === 0) console.log("cached-slot frame " + frame + " checks " + checks + " failures " + failures);
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+</script>

@@ -43,19 +43,7 @@ class RootMarker final : public JS::CallbackTracer {
   }
 };
 
-void MakeWeak(CellTail* aTail) {
-  if (aTail->anchor) {
-    aTail->handle.SetWeak();
-    if (JSRuntime* rt = Runtime()) {
-      rt->phantomTails.erase(aTail);
-    }
-    return;
-  }
-  aTail->handle.SetWeak();
-  if (JSRuntime* rt = Runtime()) {
-    rt->phantomTails.insert(aTail);
-  }
-}
+void MakeWeak(CellTail* aTail) { aTail->handle.SetWeak(); }
 
 void FreeDeadCell(CellTail* aTail) {
   if (aTail->kind == CellKind::Object) {
@@ -74,16 +62,25 @@ void FreeDeadCell(CellTail* aTail) {
 void SweepPhantomCells(JSRuntime* aRuntime) {
   aRuntime->phantomSweepPosted = false;
   std::vector<CellTail*> dead;
-  for (CellTail* tail : aRuntime->phantomTails) {
-    if (tail->handle.IsEmpty() && !tail->anchor) {
-      dead.push_back(tail);
-    }
-  }
+  dead.swap(aRuntime->deadTails);
   for (CellTail* tail : dead) {
-    aRuntime->phantomTails.erase(tail);
     FreeDeadCell(tail);
   }
   DrainDeferredObjectFrees(aRuntime, SIZE_MAX);
+}
+
+void CollectResetCells(JSRuntime* aRuntime) {
+  std::vector<uintptr_t> globals;
+  v8::TakeResetHandles(aRuntime->isolate, &globals);
+  for (uintptr_t global : globals) {
+    CellTail* tail =
+        reinterpret_cast<CellTail*>(global - offsetof(CellTail, handle));
+    if (tail->anchor) {
+      NoteDeadAnchoredCell(tail);
+    } else {
+      aRuntime->deadTails.push_back(tail);
+    }
+  }
 }
 
 class PhantomSweepTask final : public v8::Task {
@@ -96,7 +93,7 @@ class PhantomSweepTask final : public v8::Task {
 };
 
 void SchedulePhantomSweep(JSRuntime* aRuntime) {
-  if (aRuntime->phantomSweepPosted || aRuntime->phantomTails.empty()) {
+  if (aRuntime->phantomSweepPosted || aRuntime->deadTails.empty()) {
     return;
   }
   aRuntime->phantomSweepPosted = true;
@@ -357,8 +354,10 @@ void GCEpilogue(v8::Isolate* aIsolate, v8::GCType aType,
     return;
   }
   ReleaseYoungCells(rt);
+  CollectResetCells(rt);
   SchedulePhantomSweep(rt);
   if (!rt->inGC) {
+    FinalizeDeadAnchoredCells(rt);
     return;
   }
   for (CellTail* tail : rt->strongThisGC) {
@@ -416,7 +415,6 @@ void NoteDeadAnchoredCell(CellTail* aTail) {
 void ForgetTail(CellTail* aTail) {
   if (JSRuntime* rt = Runtime()) {
     rt->youngTails.erase(aTail);
-    rt->phantomTails.erase(aTail);
   }
 }
 
@@ -658,6 +656,7 @@ JSContext* JS_NewContext(uint32_t aMaxBytes, JSRuntime* aParentRuntime) {
   rt->isolate = v8::Isolate::Allocate();
   AttachIsolateToCurrentThread(sPlatform.get(), rt->isolate);
   v8::Isolate::Initialize(rt->isolate, params);
+  v8::SetResetHandleRecording(rt->isolate, kCellHandleClassId);
   rt->isolate->Enter();
   static bool sCodeRegionRegistered = false;
   if (!sCodeRegionRegistered) {
