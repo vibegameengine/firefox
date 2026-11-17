@@ -58,9 +58,28 @@ ThinLTO и PGO builtins, у нас был только `-O3`.
 - three.js (updateMatrixWorld, нормали, рейкаст): без заметной разницы (шум);
 - самый длинный кадр старта игры: 825–892 → 775–850 мс (у Chrome 570).
 
-Решения: V8 собирается clang 22 с PGO по нашему профилю. Процедура — `docs/v8-pgo.md`.
-Профиль — `C:/Projects/v8-build/pgo/v8.profdata`. Прежняя библиотека сохранена как
-`dist/Lib/Win64MD/wee8.release-clang24.lib`. ThinLTO — в работе.
+ThinLTO:
+- Первая сборка падала на старте в `TracingController::AddTraceStateObserver`: Chromium-конфиг
+  ThinLTO добавляет `-fwhole-program-vtables`, линкер считал, что все наследники `v8::Platform`
+  внутри LTO, и девиртуализировал вызов в DefaultPlatform, а наша платформа живёт в Gecko снаружи.
+  Решение — аргумент `use_whole_program_vtables = false` в конфиге сборки Chromium внутри checkout
+  V8 (патч `docs/patches/v8-chromium-build.patch`).
+- Результат PGO + ThinLTO: строки 12 мс (Chrome 13,7–16,7), JSON 10–11 мс, самый длинный кадр старта
+  игры 708–733 мс (Chrome 570). Инкрементальная сборка Gecko 94 с, как и без LTO.
+
+Решения: V8 собирается clang 22 с PGO по нашему профилю и ThinLTO. Процедура — `docs/v8-pgo.md`.
+Профиль — `C:/Projects/v8-build/pgo/v8.profdata`. Единственная рабочая папка сборки —
+`out.gn/vge-c22-pgo-lto`; промежуточные сборки и резервная библиотека clang 24 удалены.
+
+## Публикация (2026-11-17)
+
+Решение пользователя: форки на GitHub под `vibegameengine`, публичные; адрес автора в публикуемых
+коммитах заменён на `249378456+vibegameengine@users.noreply.github.com` (рабочие ветки не тронуты,
+ветки `publish/*` пересобраны `git commit-tree` с теми же деревьями и датами).
+- https://github.com/vibegameengine/firefox, ветка `vge/bedrock-runtime` (база 134b5b571e, 90 коммитов);
+- https://github.com/vibegameengine/v8, ветка `vge/bedrock-v8-15.7` (база 440c1c463e, 14 коммитов).
+Поверхностные копии пушатся, потому что базовые коммиты есть в апстримах на GitHub. Учётные данные
+git по умолчанию — другой аккаунт, пуш идёт через `-c credential.helper="!gh auth git-credential"`.
 
 ## Рывок старта игры (first_frame_ms) (2026-11-17)
 
@@ -138,6 +157,10 @@ Gecko-ячейку (форма, private key, persistent handle). Для кажд
 - ~112 МБ вне ресурсов D3D11: три D3D11-устройства (WebGL, композитор, контент), каждое ~11 МБ
   (замер отдельным тестом), плюс внутренние буферы ANGLE каждого и цепочки показа. В Chrome всё на
   одном устройстве ANGLE.
+- Цена сведения в одно устройство (замер 2026-11-17, ровная игра, 7 с, threadCPUDelta профиля Gecko):
+  на кадр 120 Гц хост WebGL (CanvasRenderer) 0,81 мс CPU, рендер WebRender (Renderer) 0,56 мс,
+  WRRenderBackend 0,26 мс, Compositor 0,18 мс, главный поток 3,09 мс. Сумма WebGL + рендер ~1,4 мс
+  из 8,3 мс — последовательная работа на одном потоке укладывается в кадр с большим запасом.
 - ANGLE в нашей сборке: `ANGLE_ENABLE_CONTEXT_MUTEX` + `SHARE_CONTEXT_LOCK`, у разных групп разные
   мьютексы, а бэкенд D3D11 держит одно состояние на устройство (`Context11::onMakeCurrent`). Значит,
   общее устройство требует одного потока GPU (как в Chrome) или общей блокировки — ждёт решения.

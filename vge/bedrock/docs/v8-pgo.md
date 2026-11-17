@@ -28,6 +28,21 @@ clang_version = "22"
 The V8 checkout needs an empty `chrome/build/win64.pgo.txt`: the PGO config
 lists it as an input even when `pgo_data_path` is given.
 
+ThinLTO needs `use_whole_program_vtables = false`, an argument added to the
+Chromium build config in the V8 checkout (`docs/patches/v8-chromium-build.patch`,
+on top of `build` at aa268127b8). The Chromium config adds
+`-fwhole-program-vtables` to every ThinLTO build; it lets the linker assume
+every subclass of a class is inside the LTO unit. Ours are not: Gecko subclasses
+`v8::Platform` (`jsapi/platform/VgeJsPlatform.cpp`) outside the bitcode, the
+linker devirtualized `platform->GetTracingController()` to the default platform
+and the runtime crashed in `TracingController::AddTraceStateObserver` at start.
+
+The one working build directory is `out.gn/vge-c22-pgo-lto` (the args below plus
+`chrome_pgo_phase = 2`, `pgo_data_path`, `use_thin_lto = true`,
+`use_whole_program_vtables = false`). For a training run make a separate
+directory with `chrome_pgo_phase = 1` and without the LTO lines, and delete it
+afterwards.
+
 ## Steps
 
 1. Instrumented V8: `chrome_pgo_phase = 1`, build `v8_monolith`, copy it to
@@ -49,11 +64,15 @@ The profile has to be retaken when V8 changes enough that most functions no
 longer match it (clang reports hash mismatches as warnings, which the build
 suppresses).
 
-## Effect (PGO alone, same machine, median of 5)
+## Effect (same machine, median of 5)
 
-| test | -O3 | PGO | Chrome 149 |
-|---|---|---|---|
-| compile and first run of 400 new functions | 5 ms | 3 ms | 2.4 ms |
-| JSON.stringify + parse of 20000 objects | 19-20 ms | 11 ms | 12 ms |
-| string split/replace/upper, 50000 | 21-22 ms | 14-15 ms | 13.7-16.7 ms |
-| object shape churn | 3 ms | 1 ms | 0.6 ms |
+| test | -O3 | PGO | PGO + ThinLTO | Chrome 149 |
+|---|---|---|---|---|
+| compile and first run of 400 new functions | 5 ms | 3 ms | 3 ms | 2.4 ms |
+| JSON.stringify + parse of 20000 objects | 19-20 ms | 11 ms | 10-11 ms | 12 ms |
+| string split/replace/upper, 50000 | 21-22 ms | 14-15 ms | 12 ms | 13.7-16.7 ms |
+| object shape churn | 3 ms | 1 ms | 1 ms | 0.6 ms |
+| longest frame of the test game's first 5 s | 825-892 ms | 775-850 ms | 708-733 ms | 570 ms |
+
+Linking Gecko with the ThinLTO `wee8.lib` took 94 s for an incremental
+`mach build`, the same as before.

@@ -1,0 +1,84 @@
+diff --git a/config/compiler/BUILD.gn b/config/compiler/BUILD.gn
+index c106acfca..55da8d72d 100644
+--- a/config/compiler/BUILD.gn
++++ b/config/compiler/BUILD.gn
+@@ -876,7 +876,7 @@ config("compiler") {
+ 
+     # TODO(crbug.com/40182783): investigate why this isn't effective on
+     # arm32.
+-    if (!is_android || current_cpu != "arm") {
++    if ((!is_android || current_cpu != "arm") && use_whole_program_vtables) {
+       cflags += [ "-fwhole-program-vtables" ]
+ 
+       if (toolchain_supports_rust_thin_lto) {
+diff --git a/config/compiler/compiler.gni b/config/compiler/compiler.gni
+index a312b04c0..5a7837140 100644
+--- a/config/compiler/compiler.gni
++++ b/config/compiler/compiler.gni
+@@ -68,6 +68,8 @@ if (use_mold && linker_path == "") {
+ }
+ 
+ declare_args() {
++  use_whole_program_vtables = true
++
+   # Set to true to use lld, the LLVM linker.
+   # This is the default when `is_clang` is true, except:
+   # - On zos.
+diff --git a/config/win/BUILD.gn b/config/win/BUILD.gn
+index 1edf10346..0bb774225 100644
+--- a/config/win/BUILD.gn
++++ b/config/win/BUILD.gn
+@@ -305,7 +305,7 @@ config("runtime_library") {
+ # manually override this config for their compiles.
+ config("winver") {
+   defines = [
+-    "NTDDI_VERSION=NTDDI_WIN11_BR",
++    "NTDDI_VERSION=NTDDI_WIN11_GE",
+ 
+     # We can't say `=_WIN32_WINNT_WIN10` here because some files do
+     # `#if WINVER < 0x0600` without including windows.h before,
+@@ -542,8 +542,7 @@ config("default_crt") {
+       # CRT in Visual Studio releases related to Windows store applications.
+       configs = [ ":dynamic_crt" ]
+     } else {
+-      # Desktop Windows: static CRT.
+-      configs = [ ":static_crt" ]
++      configs = [ ":dynamic_crt" ]
+     }
+   }
+ }
+diff --git a/toolchain/win/setup_toolchain.py b/toolchain/win/setup_toolchain.py
+index 34be00a45..bf574af74 100644
+--- a/toolchain/win/setup_toolchain.py
++++ b/toolchain/win/setup_toolchain.py
+@@ -21,7 +21,7 @@ import action_helpers
+ import gn_helpers
+ 
+ SCRIPT_DIR = os.path.dirname(__file__)
+-SDK_VERSION = '10.0.28000.0'
++SDK_VERSION = '10.0.26100.0'
+ MSVC_DIR = re.compile('^.*/VC/Tools/MSVC/[^/]+/include$')
+ WINDOWS_KITS_DIR = re.compile(r'^(.*/Windows Kits/\d+/Include/[^/]+)/.*')
+ 
+diff --git a/vs_toolchain.py b/vs_toolchain.py
+index 869b76492..5592cf7ce 100755
+--- a/vs_toolchain.py
++++ b/vs_toolchain.py
+@@ -60,7 +60,7 @@ from gn_helpers import ToGNString
+ #   Make sure any version numbers in the documentation match the code.
+ #
+ TOOLCHAIN_HASH = '3bfcb536c8'
+-SDK_VERSION = '10.0.28000.0'
++SDK_VERSION = '10.0.26100.0'
+ 
+ # Visual Studio versions are listed in descending order of priority.
+ # The first version is assumed by this script to be the one that is packaged,
+@@ -499,7 +499,7 @@ def _CopyDebugger(target_dir, target_cpu):
+     # List of debug files that should be copied, the first element of the tuple is
+     # the name of the file and the second indicates if it's optional.
+     debug_files = [
+-        ('dbghelp.dll', False),
++        ('dbghelp.dll', True),
+         ('dbgcore.dll', True),
+         ('symsrv.dll', True),
+     ]
