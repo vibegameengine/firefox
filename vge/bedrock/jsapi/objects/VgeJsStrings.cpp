@@ -550,7 +550,7 @@ JS_PUBLIC_API JSString* JS_AtomizeUCString(JSContext* cx, const char16_t* s) {
 }
 
 JS_PUBLIC_API JSString* JS_AtomizeAndPinString(JSContext* cx, const char* s) {
-  return AtomizeLatin1(cx, s, strlen(s));
+  return vge::jsapi::PinAtom(AtomizeLatin1(cx, s, strlen(s)));
 }
 
 JS_PUBLIC_API JSString* JS_ConcatStrings(JSContext* cx,

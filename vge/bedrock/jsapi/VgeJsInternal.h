@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -53,6 +54,7 @@ struct CellTail {
   bool managed;
   uint8_t marked;
   bool wrapperKey;
+  bool pinned;
   uint32_t serial;
   std::atomic<uint32_t> charRefs;
   v8::Global<v8::Value> handle;
@@ -161,6 +163,26 @@ struct BigIntCell {
     return reinterpret_cast<BigIntCell*>(const_cast<JS::BigInt*>(aBig));
   }
 };
+
+struct AtomKeyHash {
+  using is_transparent = void;
+  size_t operator()(std::u16string_view aKey) const {
+    return std::hash<std::u16string_view>{}(aKey);
+  }
+};
+
+struct AtomKeyEqual {
+  using is_transparent = void;
+  bool operator()(std::u16string_view aLeft, std::u16string_view aRight) const {
+    return aLeft == aRight;
+  }
+};
+
+using AtomTable =
+    std::unordered_map<std::u16string, StringCell*, AtomKeyHash, AtomKeyEqual>;
+
+void ForgetAtom(JSRuntime* aRuntime, StringCell* aCell);
+JSString* PinAtom(JSString* aAtom);
 
 struct CellPool {
   CellTail* freeList = nullptr;
@@ -370,7 +392,7 @@ struct JSRuntime {
   void (*weakPointerSweep)(JSRuntime*) = nullptr;
   bool sweepingWeakPointers = false;
   std::unordered_map<const JSClass*, std::vector<vge::jsapi::Shape*>> shapes;
-  std::unordered_map<std::u16string, vge::jsapi::StringCell*> atoms;
+  vge::jsapi::AtomTable atoms;
   std::unordered_multimap<int, vge::jsapi::SymbolCell*> symbols;
   uint32_t gcNumber = 0;
   bool inGC = false;

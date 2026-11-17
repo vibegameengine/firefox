@@ -292,16 +292,18 @@ v8::Local<v8::String> NewExternalFromCell(JSContext* aCx, StringCell* aCell) {
   return s;
 }
 
-v8::Local<v8::String> NewCopyFromCell(JSContext* aCx, StringCell* aCell) {
+v8::Local<v8::String> NewCopyFromCell(
+    JSContext* aCx, StringCell* aCell,
+    v8::NewStringType aType = v8::NewStringType::kNormal) {
   if (aCell->latin1()) {
     return v8::String::NewFromOneByte(
-               aCx->isolate, static_cast<const uint8_t*>(aCell->chars),
-               v8::NewStringType::kNormal, int(aCell->length()))
+               aCx->isolate, static_cast<const uint8_t*>(aCell->chars), aType,
+               int(aCell->length()))
         .ToLocalChecked();
   }
   return v8::String::NewFromTwoByte(
-             aCx->isolate, static_cast<const uint16_t*>(aCell->chars),
-             v8::NewStringType::kNormal, int(aCell->length()))
+             aCx->isolate, static_cast<const uint16_t*>(aCell->chars), aType,
+             int(aCell->length()))
       .ToLocalChecked();
 }
 
@@ -320,24 +322,105 @@ JSString* StringFromV8(JSContext* aCx, v8::Local<v8::String> aString) {
   return cell->asString();
 }
 
+namespace {
+
+constexpr size_t kAtomStackChars = 128;
+
+class AtomKeyBuffer {
+ public:
+  AtomKeyBuffer(v8::Isolate* aIsolate, v8::Local<v8::String> aString)
+      : mLength(aString->Length()) {
+    uint16_t* chars = mLength <= kAtomStackChars ? mStack : Heap(mLength);
+    aString->WriteV2(aIsolate, 0, uint32_t(mLength), chars);
+    mChars = chars;
+  }
+
+  AtomKeyBuffer(const StringCell* aCell) : mLength(aCell->length()) {
+    if (!aCell->latin1()) {
+      mChars = static_cast<const uint16_t*>(aCell->chars);
+      return;
+    }
+    uint16_t* chars = mLength <= kAtomStackChars ? mStack : Heap(mLength);
+    const uint8_t* latin1 = static_cast<const uint8_t*>(aCell->chars);
+    for (size_t i = 0; i < mLength; i++) {
+      chars[i] = latin1[i];
+    }
+    mChars = chars;
+  }
+
+  std::u16string_view View() const {
+    return std::u16string_view(reinterpret_cast<const char16_t*>(mChars),
+                               mLength);
+  }
+
+ private:
+  uint16_t* Heap(size_t aLength) {
+    mHeap.resize(aLength);
+    return mHeap.data();
+  }
+
+  size_t mLength;
+  const uint16_t* mChars = nullptr;
+  uint16_t mStack[kAtomStackChars];
+  std::vector<uint16_t> mHeap;
+};
+
+void LinkAtom(JSContext* aCx, StringCell* aCell,
+              v8::Local<v8::String> aInternalized) {
+  if (aCell->tail.handle.IsEmpty()) {
+    BindCellHandle(aCx, &aCell->tail, aInternalized, aCell->tail.pinned);
+  }
+  if (!CellOfV8String(aCx->isolate, aInternalized)) {
+    ExternalizeIntoCell(aCx, aInternalized, aCell);
+  }
+}
+
+}
+
 JSString* AtomFromV8(JSContext* aCx, v8::Local<v8::String> aString) {
-  std::u16string content;
-  content.resize(aString->Length());
-  aString->WriteV2(aCx->isolate, 0, uint32_t(int(content.size())), reinterpret_cast<uint16_t*>(content.data()));
-  auto it = aCx->runtime->atoms.find(content);
-  if (it != aCx->runtime->atoms.end()) {
+  if (StringCell* known = CellOfV8String(aCx->isolate, aString)) {
+    if (known->tail.isAtom) {
+      MarkManagedCell(&known->tail, 7);
+      return known->asString();
+    }
+  }
+  AtomKeyBuffer key(aCx->isolate, aString);
+  AtomTable& atoms = aCx->runtime->atoms;
+  auto it = atoms.find(key.View());
+  if (it != atoms.end()) {
+    MarkManagedCell(&it->second->tail, 7);
     return it->second->asString();
   }
-  v8::Local<v8::String> internalized =
-      v8::String::NewFromTwoByte(aCx->isolate,
-                                 reinterpret_cast<const uint16_t*>(content.data()),
-                                 v8::NewStringType::kInternalized,
-                                 int(content.size()))
-          .ToLocalChecked();
+  v8::Local<v8::String> internalized = aString->InternalizeString(aCx->isolate);
   StringCell* cell = FillString(aCx, internalized, true);
-  BindCellHandle(aCx, &cell->tail, internalized, true);
-  aCx->runtime->atoms.emplace(std::move(content), cell);
+  cell->tail.managed = true;
+  cell->tail.marked = 7;
+  aCx->runtime->managedStrings.push_back(cell);
+  atoms.emplace(std::u16string(key.View()), cell);
+  LinkAtom(aCx, cell, internalized);
   return cell->asString();
+}
+
+void ForgetAtom(JSRuntime* aRuntime, StringCell* aCell) {
+  AtomKeyBuffer key(aCell);
+  auto it = aRuntime->atoms.find(key.View());
+  if (it != aRuntime->atoms.end() && it->second == aCell) {
+    aRuntime->atoms.erase(it);
+  }
+}
+
+JSString* PinAtom(JSString* aAtom) {
+  if (!aAtom) {
+    return nullptr;
+  }
+  StringCell* cell = StringCell::from(aAtom);
+  cell->tail.pinned = true;
+  cell->tail.managed = false;
+  if (!cell->tail.handle.IsEmpty()) {
+    cell->tail.handle.ClearWeak();
+    ForgetTail(&cell->tail);
+  }
+  return aAtom;
 }
 
 JSString* AtomizeCell(JSContext* aCx, JSString* aStr) {
@@ -351,6 +434,12 @@ JSString* AtomizeCell(JSContext* aCx, JSString* aStr) {
 v8::Local<v8::String> ToV8(JSContext* aCx, JSString* aStr) {
   StringCell* cell = StringCell::from(aStr);
   if (cell->tail.handle.IsEmpty()) {
+    if (cell->tail.isAtom) {
+      v8::Local<v8::String> internalized =
+          NewCopyFromCell(aCx, cell, v8::NewStringType::kInternalized);
+      LinkAtom(aCx, cell, internalized);
+      return internalized;
+    }
     v8::Local<v8::String> s;
     if (cell->tail.managed && cell->length() > 0) {
       s = NewExternalFromCell(aCx, cell);
@@ -358,7 +447,7 @@ v8::Local<v8::String> ToV8(JSContext* aCx, JSString* aStr) {
     if (s.IsEmpty()) {
       s = NewCopyFromCell(aCx, cell);
     }
-    BindCellHandle(aCx, &cell->tail, s, cell->tail.isAtom);
+    BindCellHandle(aCx, &cell->tail, s, false);
     return s;
   }
   return cell->tail.handle.Get(aCx->isolate).As<v8::String>();
@@ -478,12 +567,16 @@ bool IdFromV8(JSContext* aCx, v8::Local<v8::Value> aKey,
   if (!aKey->ToString(aCx->v8Context()).ToLocal(&name)) {
     return false;
   }
-  v8::String::Value chars(aCx->isolate, name);
+  int length = name->Length();
+  uint16_t chars[10];
   uint32_t index = 0;
-  bool isIndex = chars.length() > 0 && chars.length() <= 10;
-  for (int i = 0; isIndex && i < chars.length(); i++) {
-    char16_t c = (*chars)[i];
-    if (c < '0' || c > '9' || (i == 0 && c == '0' && chars.length() > 1)) {
+  bool isIndex = length > 0 && length <= 10;
+  if (isIndex) {
+    name->WriteV2(aCx->isolate, 0, uint32_t(length), chars);
+  }
+  for (int i = 0; isIndex && i < length; i++) {
+    char16_t c = chars[i];
+    if (c < '0' || c > '9' || (i == 0 && c == '0' && length > 1)) {
       isIndex = false;
       break;
     }

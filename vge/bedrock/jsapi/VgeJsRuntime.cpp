@@ -48,7 +48,11 @@ class RootMarker final : public JS::CallbackTracer {
   }
 };
 
-void MakeWeak(CellTail* aTail) { aTail->handle.SetWeak(); }
+void MakeWeak(CellTail* aTail) {
+  if (!aTail->pinned) {
+    aTail->handle.SetWeak();
+  }
+}
 
 void FreeDeadCell(CellTail* aTail) {
   if (aTail->kind == CellKind::Object) {
@@ -91,6 +95,9 @@ void ReleaseUnmarkedManagedCells(JSRuntime* aRuntime) {
   std::vector<StringCell*>& cells = aRuntime->managedStrings;
   size_t kept = 0;
   for (StringCell* cell : cells) {
+    if (!cell->tail.managed) {
+      continue;
+    }
     stringSites[cell->tail.marked & 7]++;
     if (cell->tail.marked) {
       cell->tail.marked = 0;
@@ -98,6 +105,9 @@ void ReleaseUnmarkedManagedCells(JSRuntime* aRuntime) {
     } else if (cell->tail.charRefs.load(std::memory_order_acquire)) {
       cells[kept++] = cell;
     } else {
+      if (cell->tail.isAtom) {
+        ForgetAtom(aRuntime, cell);
+      }
       FreeDeadCell(&cell->tail);
     }
   }
