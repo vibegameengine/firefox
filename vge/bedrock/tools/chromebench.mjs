@@ -104,6 +104,24 @@ try {
       categories: ["v8", "disabled-by-default-v8.gc", "devtools.timeline", "blink.user_timing"],
     });
   }
+  const memdump = process.env.CHROME_MEMDUMP;
+  let cdp;
+  const dumpEvents = [];
+  if (memdump) {
+    cdp = await browser.newBrowserCDPSession();
+    cdp.on("Tracing.dataCollected", (event) => {
+      for (const value of event.value) {
+        if (value.ph === "v") dumpEvents.push(value);
+      }
+    });
+    await cdp.send("Tracing.start", {
+      transferMode: "ReportEvents",
+      traceConfig: {
+        includedCategories: ["disabled-by-default-memory-infra"],
+        memoryDumpConfig: { triggers: [] },
+      },
+    });
+  }
   await page.goto(process.env.BENCH_URL ?? "https://claybound-56949.web.app/");
   await page.evaluate(probe);
   const pid = powershell(
@@ -114,6 +132,13 @@ try {
   await new Promise((resolve) => watch.on("exit", resolve));
   if (trace) {
     await browser.stopTracing();
+  }
+  if (memdump) {
+    const dump = await cdp.send("Tracing.requestMemoryDump", { deterministic: false, levelOfDetail: "detailed" });
+    const complete = new Promise((resolve) => cdp.once("Tracing.tracingComplete", resolve));
+    await cdp.send("Tracing.end");
+    await complete;
+    writeFileSync(`${results}/${label}.memdump.json`, JSON.stringify({ dump, traceEvents: dumpEvents }));
   }
   const before = memory("before");
   const video = videoMemory();
